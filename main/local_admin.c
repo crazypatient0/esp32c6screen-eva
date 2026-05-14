@@ -632,6 +632,8 @@ bool local_admin_wifi_connect_from_store(void)
 
     wifi_credentials_copy_to_sta_config(wifi_config.sta.ssid, wifi_config.sta.password, ssid, pass);
     wifi_config.sta.threshold.authmode = pass[0] ? WIFI_AUTH_WPA_PSK : WIFI_AUTH_OPEN;
+    wifi_config.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+    wifi_config.sta.bssid_set = 0;
 
     err = esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
     if (err != ESP_OK) {
