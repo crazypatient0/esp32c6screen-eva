@@ -308,68 +308,56 @@ static void channel_read_task(void *arg)
 // Returns the filtered text in output buffer, returns false if no actual content found
 static bool filter_thinking_content(const char *input, char *output, size_t output_size)
 {
-    // Thinking content lines start with these prefixes (from LLM bridge debug output)
-    static const char *thinking_prefixes[] = {
-        "Processing:",
-        "Tokens:",
-        "Resp chars:",
-        "Cache hits:",
-        "Response:",
-        NULL
-    };
-
     output[0] = '\0';
     if (!input || !output || output_size == 0) {
         return false;
     }
 
-    char line_buf[256];
+    const char *src = input;
+    char *dst = output;
     size_t written = 0;
-    const char *ptr = input;
     bool found_content = false;
 
-    while (*ptr) {
-        // Read one line
-        size_t i = 0;
-        while (*ptr && *ptr != '\n' && *ptr != '\r' && i < sizeof(line_buf) - 1) {
-            line_buf[i++] = *ptr++;
-        }
-        line_buf[i] = '\0';
-
-        // Skip the newline characters
-        while (*ptr == '\n' || *ptr == '\r') {
-            ptr++;
+    while (*src && written < output_size - 1) {
+        // Skip <think>...</think> blocks
+        if (strncmp(src, "<think>", 7) == 0) {
+            const char *end = strstr(src, "</think>");
+            if (end) {
+                src = end + 8;  // skip past </think>
+                continue;
+            }
         }
 
-        // Check if this line is thinking content
-        bool is_thinking = false;
-        for (int j = 0; thinking_prefixes[j] != NULL; j++) {
-            if (strncmp(line_buf, thinking_prefixes[j], strlen(thinking_prefixes[j])) == 0) {
-                is_thinking = true;
+        // Skip debug/info lines (bridge output)
+        const char *line_start = src;
+        while (*line_start == '\n' || *line_start == '\r') line_start++;
+
+        static const char *thinking_prefixes[] = {
+            "Processing:", "Tokens:", "Resp chars:", "Cache hits:", "Response:", NULL
+        };
+        bool is_debug = false;
+        for (int i = 0; thinking_prefixes[i] != NULL; i++) {
+            if (strncmp(line_start, thinking_prefixes[i], strlen(thinking_prefixes[i])) == 0) {
+                is_debug = true;
                 break;
             }
         }
-
-        if (!is_thinking && line_buf[0] != '\0') {
-            // This is actual content - copy it
-            if (found_content) {
-                // Add newline before subsequent content
-                if (written < output_size - 1) {
-                    output[written++] = '\n';
-                }
-            }
-            size_t len = strlen(line_buf);
-            if (len > output_size - 1 - written) {
-                len = output_size - 1 - written;
-            }
-            memcpy(output + written, line_buf, len);
-            written += len;
-            output[written] = '\0';
-            found_content = true;
+        if (is_debug) {
+            while (*src && *src != '\n' && *src != '\r') src++;
+            while (*src == '\n' || *src == '\r') src++;
+            continue;
         }
-    }
 
-    return found_content;
+        // Copy character
+        *dst++ = *src++;
+        written++;
+    }
+    *dst = '\0';
+
+    // Check if we found actual content (not just whitespace)
+    const char *p = output;
+    while (*p == ' ' || *p == '\n' || *p == '\r' || *p == '\t') p++;
+    return *p != '\0';
 }
 
 // Write task: watch output queue, print responses
@@ -380,21 +368,19 @@ static void channel_write_task(void *arg)
 
     while (1) {
         if (xQueueReceive(s_output_queue, &msg, portMAX_DELAY) == pdTRUE) {
-            // Print response with newlines
-            const char *text = msg.text;
-            channel_write_normalized_text(text, portMAX_DELAY);
+            // Filter thinking content for display and HTTP
+            char filtered[sizeof(s_last_response)];
+            bool has_content = filter_thinking_content(msg.text, filtered, sizeof(filtered));
+            const char *display_text = has_content ? filtered : msg.text;
+
+            // Print filtered response with newlines to serial
+            channel_write_normalized_text(display_text, portMAX_DELAY);
             channel_io_write_bytes((const uint8_t *)"\r\n\r\n", 4, portMAX_DELAY);
 
             // Save for HTTP chat polling - filter out thinking content
             if (s_response_mutex) {
-                char filtered[sizeof(s_last_response)];
-                bool has_content = filter_thinking_content(msg.text, filtered, sizeof(filtered));
                 xSemaphoreTake(s_response_mutex, portMAX_DELAY);
-                if (has_content) {
-                    strncpy(s_last_response, filtered, sizeof(s_last_response) - 1);
-                } else {
-                    strncpy(s_last_response, msg.text, sizeof(s_last_response) - 1);
-                }
+                strncpy(s_last_response, display_text, sizeof(s_last_response) - 1);
                 s_last_response[sizeof(s_last_response) - 1] = '\0';
                 xSemaphoreGive(s_response_mutex);
             }
