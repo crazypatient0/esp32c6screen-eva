@@ -5,11 +5,18 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include <stdint.h>
+#include "cJSON.h"
 
 // Start the agent task
 esp_err_t agent_start(QueueHandle_t input_queue,
                       QueueHandle_t channel_output_queue,
                       QueueHandle_t telegram_output_queue);
+
+// Get agent debug state as cJSON (caller must free the returned pointer)
+cJSON *agent_get_debug_state(void);
+
+// Clear the pending response state (used to unstick a hung UI)
+void agent_clear_pending_response(void);
 
 #ifdef TEST_BUILD
 // Test-only helpers to drive agent logic without spawning FreeRTOS tasks.

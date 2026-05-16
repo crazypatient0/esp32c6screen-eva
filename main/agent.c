@@ -1,6 +1,7 @@
 #include "agent.h"
 #include "agent_commands.h"
 #include "agent_prompt.h"
+#include "channel.h"
 #include "config.h"
 #include "local_admin.h"
 #include "llm.h"
@@ -34,6 +35,13 @@ static int64_t s_last_non_command_response_us = 0;
 static char s_last_non_command_text[CHANNEL_RX_BUF_SIZE] = {0};
 static bool s_messages_paused = false;
 static char s_system_prompt_buf[2048];
+
+// Pending response flag: set to true when agent starts processing,
+// cleared when send_response is called (via queue_channel_response).
+// If left true after MESSAGE_TIMEOUT_MS, the response is considered lost.
+static bool s_pending_response = false;
+static int64_t s_pending_response_start_us = 0;
+#define MESSAGE_TIMEOUT_MS 30000  // 30s timeout for one message round-trip
 
 static agent_persona_t s_persona = AGENT_PERSONA_NEUTRAL;
 
@@ -141,19 +149,35 @@ static void history_add(const char *role, const char *content,
     }
 }
 
-static void queue_channel_response(const char *text)
+// Returns true if response was queued, false if queue was full (fallback write used).
+static bool queue_channel_response(const char *text)
 {
     if (!s_channel_output_queue) {
-        return;
+        return false;
     }
 
     channel_output_msg_t msg;
     strncpy(msg.text, text, CHANNEL_TX_BUF_SIZE - 1);
     msg.text[CHANNEL_TX_BUF_SIZE - 1] = '\0';
 
-    if (xQueueSend(s_channel_output_queue, &msg, pdMS_TO_TICKS(1000)) != pdTRUE) {
-        ESP_LOGE(TAG, "Failed to send response to channel queue");
+    // Try once with a short timeout first
+    if (xQueueSend(s_channel_output_queue, &msg, pdMS_TO_TICKS(100)) == pdTRUE) {
+        return true;
     }
+
+    // Queue was full - retry with exponential backoff before falling back to direct write
+    ESP_LOGW(TAG, "Channel queue full, retrying...");
+    vTaskDelay(pdMS_TO_TICKS(200));
+
+    if (xQueueSend(s_channel_output_queue, &msg, pdMS_TO_TICKS(500)) == pdTRUE) {
+        return true;
+    }
+
+    // Queue still full - do direct write to s_last_response as last resort.
+    // This ensures error messages at least reach the HTTP poll client.
+    ESP_LOGW(TAG, "Channel queue still full, using direct write fallback");
+    channel_set_last_response_direct(text);
+    return false;
 }
 
 static void queue_telegram_response(const char *text, int64_t chat_id)
@@ -174,6 +198,10 @@ static void queue_telegram_response(const char *text, int64_t chat_id)
 
 static void send_response(const char *text, int64_t chat_id)
 {
+    // Mark response as delivered (even if queue is full and we used fallback direct write)
+    s_pending_response = false;
+    s_pending_response_start_us = 0;
+
     queue_channel_response(text);
     queue_telegram_response(text, chat_id);
 }
@@ -399,7 +427,10 @@ static int64_t response_chat_id_for_source(message_source_t source, int64_t chat
 // Process a single user message
 static void process_message(const char *user_message, message_source_t source, int64_t reply_chat_id)
 {
-    ESP_LOGI(TAG, "Processing: %s", user_message);
+    ESP_LOGI(TAG, "========================================");
+    ESP_LOGI(TAG, "process_message START: msg=%s", user_message);
+    ESP_LOGI(TAG, "process_message: history_len=%d s_history_len @ start", s_history_len);
+    ESP_LOGI(TAG, "process_message: source=%d", source);
     int history_turn_start = s_history_len;
     bool is_non_command_message = !agent_is_slash_command(user_message);
     bool is_cron_trigger = agent_is_cron_trigger_message(user_message);
@@ -494,6 +525,11 @@ static void process_message(const char *user_message, message_source_t source, i
         }
     }
 
+    // Mark that we're now processing a message - send_response should be called when done.
+    // If left pending for > MESSAGE_TIMEOUT_MS, the response is considered lost.
+    s_pending_response = true;
+    s_pending_response_start_us = esp_timer_get_time();
+
     // Get tools
     int tool_count;
     const tool_def_t *tools = tools_get_all(&tool_count);
@@ -503,6 +539,7 @@ static void process_message(const char *user_message, message_source_t source, i
 
     // Add user message to history
     history_add("user", user_message, false, false, NULL, NULL);
+    ESP_LOGI(TAG, "[DIAG] history_len=%d after adding user msg", s_history_len);
 
     int rounds = 0;
     bool done = false;
@@ -532,6 +569,8 @@ static void process_message(const char *user_message, message_source_t source, i
         }
 
         ESP_LOGI(TAG, "Request: %d bytes", (int)strlen(request));
+        ESP_LOGI(TAG, "[DIAG] Calling llm_request (round=%d)...", rounds);
+        ESP_LOGI(TAG, "[DIAG] history_len=%d rounds=%d", s_history_len, rounds);
 
         // Check rate limit before making request
         char rate_reason[128];
@@ -560,7 +599,11 @@ static void process_message(const char *user_message, message_source_t source, i
             }
 
             int64_t llm_started_us = esp_timer_get_time();
+            ESP_LOGI(TAG, "[LLM] Calling llm_request round=%d retry=%d", rounds, retry);
             err = llm_request(request, s_response_buf, sizeof(s_response_buf));
+            ESP_LOGI(TAG, "[LLM] llm_request returned err=%d duration_ms=%" PRIu32, err,
+                     us_to_ms_u32(elapsed_us_since(llm_started_us)));
+            ESP_LOGI(TAG, "[DIAG] llm_request done, err=%d, rounds=%d", err, rounds);
             metrics.llm_us_total += elapsed_us_since(llm_started_us);
             metrics.llm_calls++;
             if (err == ESP_OK) {
@@ -607,9 +650,11 @@ static void process_message(const char *user_message, message_source_t source, i
         free(request);
 
         if (err != ESP_OK) {
-            ESP_LOGE(TAG, "LLM request failed after %d retries", LLM_MAX_RETRIES);
+            ESP_LOGE(TAG, "LLM request failed after %d retries (err=%d)", LLM_MAX_RETRIES, err);
             history_rollback_to(history_turn_start, "llm request failed");
+            ESP_LOGI(TAG, "Sending error response to channel...");
             send_response("Error: Failed to contact LLM API after retries", reply_chat_id);
+            ESP_LOGI(TAG, "Error response sent");
             telegram_resume_polling();
             telegram_polling_paused = false;
             metrics_log_request(&metrics, "llm_error");
@@ -726,6 +771,8 @@ static void process_message(const char *user_message, message_source_t source, i
     }
 
     metrics_log_request(&metrics, "success");
+    ESP_LOGI(TAG, "process_message END: msg=%s", user_message);
+    ESP_LOGI(TAG, "========================================");
 }
 
 #ifdef TEST_BUILD
@@ -802,3 +849,37 @@ esp_err_t agent_start(QueueHandle_t input_queue,
     ESP_LOGI(TAG, "Agent started");
     return ESP_OK;
 }
+
+// Public debug API
+cJSON *agent_get_debug_state(void)
+{
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return NULL;
+
+    cJSON_AddNumberToObject(root, "history_len", s_history_len);
+    cJSON_AddNumberToObject(root, "history_max", MAX_HISTORY_TURNS * 2);
+    cJSON_AddNumberToObject(root, "persona", s_persona);
+    cJSON_AddBoolToObject(root, "messages_paused", s_messages_paused);
+    cJSON_AddBoolToObject(root, "pending_response", s_pending_response);
+
+    if (s_pending_response && s_pending_response_start_us > 0) {
+        int64_t now_us = esp_timer_get_time();
+        int64_t pending_ms = (now_us - s_pending_response_start_us) / 1000;
+        cJSON_AddNumberToObject(root, "pending_ms", (double)pending_ms);
+    }
+
+    cJSON_AddStringToObject(root, "last_non_command",
+        s_last_non_command_text[0] ? s_last_non_command_text : "(none)");
+
+    return root;
+}
+
+void agent_clear_pending_response(void)
+{
+    s_pending_response = false;
+    s_pending_response_start_us = 0;
+}
+
+#ifdef TEST_BUILD
+
+#endif  // TEST_BUILD

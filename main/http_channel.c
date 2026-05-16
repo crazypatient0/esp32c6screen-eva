@@ -7,6 +7,7 @@
 #include "cJSON.h"
 #include "messages.h"
 #include "channel.h"
+#include "agent.h"
 #include "tools.h"
 #include "memory.h"
 #include "llm.h"
@@ -622,6 +623,30 @@ static esp_err_t status_handler(httpd_req_t *req)
     return err;
 }
 
+static esp_err_t debug_handler(httpd_req_t *req)
+{
+    cJSON *state = agent_get_debug_state();
+    if (!state) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to get debug state");
+        return ESP_FAIL;
+    }
+    
+    const char *last_resp = channel_get_last_response();
+    cJSON_AddStringToObject(state, "last_response", last_resp && last_resp[0] ? last_resp : "(none)");
+    
+    char *json = cJSON_PrintUnformatted(state);
+    cJSON_Delete(state);
+    if (!json) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to format debug state");
+        return ESP_FAIL;
+    }
+    
+    httpd_resp_set_type(req, "application/json");
+    esp_err_t err = httpd_resp_send(req, json, strlen(json));
+    free(json);
+    return err;
+}
+
 static esp_err_t tool_handler(httpd_req_t *req)
 {
     ESP_LOGI(TAG, "[HTTP] POST /tool");
@@ -879,6 +904,7 @@ esp_err_t http_channel_start(QueueHandle_t input_queue)
             {"/expr/play", HTTP_POST, expr_play_handler, NULL},
             {"/config/llm", HTTP_GET, config_llm_get_handler, NULL},
             {"/config/llm", HTTP_POST, config_llm_set_handler, NULL},
+            {"/debug", HTTP_GET, debug_handler, NULL},
             {"/*", HTTP_GET, not_found_handler, NULL},
             {"/*", HTTP_POST, not_found_handler, NULL},
             {"/*", HTTP_PUT, not_found_handler, NULL},

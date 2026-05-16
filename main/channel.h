@@ -20,6 +20,10 @@ void channel_write(const char *text);
 // Get the last agent response (for HTTP chat polling).
 const char *channel_get_last_response(void);
 
+// Direct write to last_response buffer (bypasses queue).
+// Used as fallback when queue is full to ensure error messages reach the UI.
+void channel_set_last_response_direct(const char *text);
+
 // Exchange one LLM request/response line with a host bridge over serial.
 // Used by emulator live-LLM mode.
 esp_err_t channel_llm_bridge_exchange(const char *request_json,

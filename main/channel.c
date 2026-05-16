@@ -145,6 +145,16 @@ const char *channel_get_last_response(void) {
     return ret;
 }
 
+// Direct write to last_response buffer (bypasses queue).
+// Used as fallback when queue is full to ensure error messages reach the UI.
+void channel_set_last_response_direct(const char *text) {
+    if (!s_response_mutex) return;
+    xSemaphoreTake(s_response_mutex, portMAX_DELAY);
+    strncpy(s_last_response, text, sizeof(s_last_response) - 1);
+    s_last_response[sizeof(s_last_response) - 1] = '\0';
+    xSemaphoreGive(s_response_mutex);
+}
+
 void channel_init(void)
 {
     channel_io_init();
@@ -368,10 +378,15 @@ static void channel_write_task(void *arg)
 
     while (1) {
         if (xQueueReceive(s_output_queue, &msg, portMAX_DELAY) == pdTRUE) {
+            ESP_LOGI(TAG, "[CHANNEL_OUT] len=%d text starts: %.50s",
+                     (int)strlen(msg.text), msg.text);
+
             // Filter thinking content for display and HTTP
             char filtered[sizeof(s_last_response)];
             bool has_content = filter_thinking_content(msg.text, filtered, sizeof(filtered));
             const char *display_text = has_content ? filtered : msg.text;
+            ESP_LOGI(TAG, "[CHANNEL_OUT] after_filter has_content=%d display: %.80s",
+                     has_content, display_text);
 
             // Print filtered response with newlines to serial
             channel_write_normalized_text(display_text, portMAX_DELAY);
