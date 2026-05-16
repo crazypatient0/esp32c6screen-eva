@@ -304,10 +304,79 @@ static void channel_read_task(void *arg)
     }
 }
 
+// Filter thinking/debug content from LLM bridge responses
+// Returns the filtered text in output buffer, returns false if no actual content found
+static bool filter_thinking_content(const char *input, char *output, size_t output_size)
+{
+    // Thinking content lines start with these prefixes (from LLM bridge debug output)
+    static const char *thinking_prefixes[] = {
+        "Processing:",
+        "Tokens:",
+        "Resp chars:",
+        "Cache hits:",
+        "Response:",
+        NULL
+    };
+
+    output[0] = '\0';
+    if (!input || !output || output_size == 0) {
+        return false;
+    }
+
+    char line_buf[256];
+    size_t written = 0;
+    const char *ptr = input;
+    bool found_content = false;
+
+    while (*ptr) {
+        // Read one line
+        size_t i = 0;
+        while (*ptr && *ptr != '\n' && *ptr != '\r' && i < sizeof(line_buf) - 1) {
+            line_buf[i++] = *ptr++;
+        }
+        line_buf[i] = '\0';
+
+        // Skip the newline characters
+        while (*ptr == '\n' || *ptr == '\r') {
+            ptr++;
+        }
+
+        // Check if this line is thinking content
+        bool is_thinking = false;
+        for (int j = 0; thinking_prefixes[j] != NULL; j++) {
+            if (strncmp(line_buf, thinking_prefixes[j], strlen(thinking_prefixes[j])) == 0) {
+                is_thinking = true;
+                break;
+            }
+        }
+
+        if (!is_thinking && line_buf[0] != '\0') {
+            // This is actual content - copy it
+            if (found_content) {
+                // Add newline before subsequent content
+                if (written < output_size - 1) {
+                    output[written++] = '\n';
+                }
+            }
+            size_t len = strlen(line_buf);
+            if (len > output_size - 1 - written) {
+                len = output_size - 1 - written;
+            }
+            memcpy(output + written, line_buf, len);
+            written += len;
+            output[written] = '\0';
+            found_content = true;
+        }
+    }
+
+    return found_content;
+}
+
 // Write task: watch output queue, print responses
 static void channel_write_task(void *arg)
 {
     channel_output_msg_t msg;
+    (void)arg;
 
     while (1) {
         if (xQueueReceive(s_output_queue, &msg, portMAX_DELAY) == pdTRUE) {
@@ -315,11 +384,17 @@ static void channel_write_task(void *arg)
             const char *text = msg.text;
             channel_write_normalized_text(text, portMAX_DELAY);
             channel_io_write_bytes((const uint8_t *)"\r\n\r\n", 4, portMAX_DELAY);
-            
-            // Save for HTTP chat polling
+
+            // Save for HTTP chat polling - filter out thinking content
             if (s_response_mutex) {
+                char filtered[sizeof(s_last_response)];
+                bool has_content = filter_thinking_content(msg.text, filtered, sizeof(filtered));
                 xSemaphoreTake(s_response_mutex, portMAX_DELAY);
-                strncpy(s_last_response, msg.text, sizeof(s_last_response) - 1);
+                if (has_content) {
+                    strncpy(s_last_response, filtered, sizeof(s_last_response) - 1);
+                } else {
+                    strncpy(s_last_response, msg.text, sizeof(s_last_response) - 1);
+                }
                 s_last_response[sizeof(s_last_response) - 1] = '\0';
                 xSemaphoreGive(s_response_mutex);
             }

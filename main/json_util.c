@@ -464,9 +464,52 @@ static bool parse_openai_response(
 
     // Check for text content
     cJSON *content = cJSON_GetObjectItem(message, "content");
-    if (content && cJSON_IsString(content)) {
-        strncpy(text_out, content->valuestring, text_out_len - 1);
-        text_out[text_out_len - 1] = '\0';
+    if (content) {
+        if (cJSON_IsString(content)) {
+            // Plain string content (standard OpenAI format)
+            // Filter out <think>...</think> blocks (Claude/MiniMax thinking)
+            const char *src = content->valuestring;
+            char *dst = text_out;
+            size_t written = 0;
+            size_t max_len = text_out_len - 1;
+
+            while (*src && written < max_len) {
+                // Check for <think> tag (MiniMax/Claude format)
+                if (strncmp(src, "<think>", 7) == 0) {
+                    // Skip until </think>
+                    const char *end = strstr(src, "</think>");
+                    if (end) {
+                        src = end + 8;  // skip past </think>
+                        continue;
+                    }
+                }
+                *dst++ = *src++;
+                written++;
+            }
+            *dst = '\0';
+        } else if (cJSON_IsArray(content)) {
+            // MiniMax returns content as array of blocks with type=text or type=thinking
+            size_t written = 0;
+            int arr_size = cJSON_GetArraySize(content);
+            for (int i = 0; i < arr_size && written < text_out_len - 1; i++) {
+                cJSON *block = cJSON_GetArrayItem(content, i);
+                if (!block) continue;
+                cJSON *type = cJSON_GetObjectItem(block, "type");
+                if (!type || !cJSON_IsString(type)) continue;
+                // Skip thinking blocks - only extract text blocks
+                if (strcmp(type->valuestring, "thinking") == 0) continue;
+                if (strcmp(type->valuestring, "text") != 0) continue;
+                cJSON *text = cJSON_GetObjectItem(block, "text");
+                if (!text || !cJSON_IsString(text)) continue;
+                size_t len = strlen(text->valuestring);
+                if (len > text_out_len - 1 - written) {
+                    len = text_out_len - 1 - written;
+                }
+                memcpy(text_out + written, text->valuestring, len);
+                written += len;
+            }
+            text_out[written] = '\0';
+        }
     }
 
     // Check for tool_calls
