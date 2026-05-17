@@ -133,8 +133,8 @@ TOOL_ENTRY("delete_user_tool",
 
 // Display
 TOOL_ENTRY("set_expression",
-           "Change the display expression. id: 0=neutral, 1=happy(∩∩), 2=wink, 3=surprised(O_O), 4=sleepy(__), 5=look-left, 6=look-right, 7=suspicious, 8=cry(T_T), 9=oops(>.<), 10=sad(∪∪)",
-           "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":10}},\"required\":[\"id\"]}",
+           "Change the display expression. id: 0=neutral, 1=happy(∩∩), 2=wink, 3=surprised(O_O), 4=sleepy(__), 5=thinking(look-left→look-right→return, 3s), 6=suspicious, 7=cry(T_T), 8=oops(>.<), 9=sad(∪∪)",
+           "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":9}},\"required\":[\"id\"]}",
            tools_set_expression_handler)
 
 // Servo

@@ -6,35 +6,56 @@
 #include "LVGL_Driver.h"
 #include "display_task.h"
 
-// Frame counter for web UI FPS display
-static uint32_t s_frame_count = 0;
+// Frame counter for web UI FPS display (actual flushes, not loop iterations)
 static uint32_t s_fps_avg = 0;
 static int64_t s_fps_last_update = 0;
 
+// CPU measurement: track task active time
+static int64_t s_cpu_last_update = 0;
+static int64_t s_cpu_active_us = 0;
+static uint8_t s_cpu_usage = 0;
+
+// External flush counter from LVGL driver (volatile, defined in LVGL_Driver.c)
+extern volatile uint32_t s_flush_count;
+
 uint32_t lvgl_fps_avg_get(void) {
     return s_fps_avg;
+}
+
+uint8_t display_cpu_usage_get(void) {
+    return s_cpu_usage;
 }
 
 // Expression state
 static int current_expr = EXPR_NEUTRAL;
 static int target_expr = EXPR_NEUTRAL;
 
+// Thinking animation state
+static bool s_thinking = false;
+static int64_t s_thinking_start;        // esp_timer time when thinking started
+static int s_thinking_base;            // expression to return to after thinking
+static int s_thinking_phase = 0;       // 0=→left, 1=hold-left, 2=→right, 3=hold-right, 4=done
+
 // Extern for LVGL display
 extern lv_disp_t *disp;
 
 // Expression data: w,h,x,y,r ×2
-static const int16_t ex[11][10] = {
+// Expression data: w,h,x,y,r ×2
+// Public IDs: 0-9. Internal (thinking animation): indices 10-11.
+// is_line checks: a==1||a==8||a==9 (happy,cry,oops). sad(10) uses lines too.
+static const int16_t ex[12][10] = {
     {90,50,35,61,15, 90,50,195,61,15},     // 0 neutral
     {0,0,0,0,0, 0,0,0,0,0},                // 1 ∩∩ happy
     {90,50,35,61,15, 90,6,195,83,3},       // 2 wink
     {120,75,20,49,25, 120,75,180,49,25},   // 3 surprised
     {80,10,40,81,5, 80,10,200,81,5},       // 4 sleepy
-    {75,45,15,64,15, 75,45,175,64,15},     // 5 left
-    {75,45,55,64,15, 75,45,215,64,15},     // 6 right
-    {70,35,35,69,12, 95,50,195,61,15},     // 7 suspicious
-    {0,0,0,0,0, 0,0,0,0,0},                // 8 T_T cry
-    {0,0,0,0,0, 0,0,0,0,0},                // 9 >.< oops
-    {0,0,0,0,0, 0,0,0,0,0},                //10 ∪∪ sad
+    {0,0,0,0,0, 0,0,0,0,0},                // 5 thinking (placeholder, not rendered directly)
+    {70,35,35,69,12, 95,50,195,61,15},     // 6 suspicious
+    {0,0,0,0,0, 0,0,0,0,0},                // 7 T_T cry
+    {0,0,0,0,0, 0,0,0,0,0},                // 8 >.< oops
+    {0,0,0,0,0, 0,0,0,0,0},                // 9 ∪∪ sad (uses s1-s8 lines)
+    {75,45,15,64,15, 75,45,175,64,15},     // 10 left (thinking internal)
+    {75,45,55,64,15, 75,45,215,64,15},     // 11 right (thinking internal)
 };
 
 // Line objects for expressions
@@ -56,16 +77,20 @@ static void ay(lv_obj_t *o,int32_t v){lv_obj_set_y(o,v);}
 static void ar(lv_obj_t *o,int32_t v){lv_obj_set_style_radius(o,v,0);}
 
 static void sa(lv_obj_t *o,lv_anim_exec_xcb_t cb,int32_t f,int32_t t){
-    lv_anim_t a; lv_anim_init(&a);
-    lv_anim_set_var(&a,o); lv_anim_set_exec_cb(&a,cb);
-    lv_anim_set_values(&a,f,t); lv_anim_set_time(&a,300);
-    lv_anim_set_path_cb(&a,lv_anim_path_ease_out);
-    lv_anim_start(&a);
+    static lv_anim_t a_pool[32];
+    static int pool_idx = 0;
+    lv_anim_t *a = &a_pool[pool_idx++];
+    if(pool_idx >= 32) pool_idx = 0;
+    lv_anim_init(a);
+    lv_anim_set_var(a,o); lv_anim_set_exec_cb(a,cb);
+    lv_anim_set_values(a,f,t); lv_anim_set_time(a,300);
+    lv_anim_set_path_cb(a,lv_anim_path_ease_out);
+    lv_anim_start(a);
 }
 
 static void apply(int a){
     int16_t *d=ex[a];
-    int is_line=(a==1||a==8||a==9||a==10);
+    int is_line=(a==1||a==7||a==8||a==9);
     int tw=is_line?0:d[0],th=is_line?0:d[1],tx=is_line?80:d[2],ty=is_line?86:d[3],tr=is_line?0:d[4];
     int tw2=is_line?0:d[5],th2=is_line?0:d[6],tx2=is_line?80:d[7],ty2=is_line?86:d[8],tr2=is_line?0:d[9];
 
@@ -87,19 +112,34 @@ static void apply(int a){
     if(is_line){
         lv_obj_add_flag(l_eye,LV_OBJ_FLAG_HIDDEN); lv_obj_add_flag(r_eye,LV_OBJ_FLAG_HIDDEN);
         if(a==1) for(int i=1;i<=9;i++) lv_obj_clear_flag((lv_obj_t*[]){0,h1,h2,h3,h4,h5,h6,h7,h8,h9}[i],LV_OBJ_FLAG_HIDDEN);
-        else if(a==8) for(int i=0;i<4;i++) lv_obj_clear_flag((lv_obj_t*[]){c1,c2,c3,c4}[i],LV_OBJ_FLAG_HIDDEN);
-        else if(a==9){for(int i=0;i<4;i++) lv_obj_clear_flag((lv_obj_t*[]){g1,g2,g3,g4}[i],LV_OBJ_FLAG_HIDDEN); lv_obj_clear_flag(gdot,LV_OBJ_FLAG_HIDDEN);}
-        else if(a==10) for(int i=0;i<8;i++) lv_obj_clear_flag((lv_obj_t*[]){s1,s2,s3,s4,s5,s6,s7,s8}[i],LV_OBJ_FLAG_HIDDEN);
+        else if(a==7) for(int i=0;i<4;i++) lv_obj_clear_flag((lv_obj_t*[]){c1,c2,c3,c4}[i],LV_OBJ_FLAG_HIDDEN);
+        else if(a==8){for(int i=0;i<4;i++) lv_obj_clear_flag((lv_obj_t*[]){g1,g2,g3,g4}[i],LV_OBJ_FLAG_HIDDEN); lv_obj_clear_flag(gdot,LV_OBJ_FLAG_HIDDEN);}
+        else if(a==9) for(int i=0;i<8;i++) lv_obj_clear_flag((lv_obj_t*[]){s1,s2,s3,s4,s5,s6,s7,s8}[i],LV_OBJ_FLAG_HIDDEN);
     } else {
         lv_obj_clear_flag(l_eye,LV_OBJ_FLAG_HIDDEN); lv_obj_clear_flag(r_eye,LV_OBJ_FLAG_HIDDEN);
     }
 }
 
 void display_set_expr(int id){
-    if(id>=0 && id<=10) target_expr=id;
+    if(id < 0 || id > 9) return;  // public IDs 0-9 only
+
+    if(id == EXPR_THINKING){
+        // Start thinking animation from current expression
+        s_thinking_base = current_expr;
+        s_thinking = true;
+        s_thinking_phase = 0;
+        s_thinking_start = esp_timer_get_time();
+        target_expr = EXPR_LEFT_IDX;
+    } else {
+        // Any non-thinking expression cancels any in-progress thinking
+        s_thinking = false;
+        target_expr = id;
+    }
 }
 
 int display_get_expr(void){ return current_expr; }
+
+bool display_is_thinking(void){ return s_thinking; }
 
 static void display_task(void *arg){
     // Initialize LVGL
@@ -191,17 +231,58 @@ static void display_task(void *arg){
 
     // Main display loop
     while(1){
-        if(target_expr != current_expr){
+        // Handle thinking animation state machine
+        if(s_thinking){
+            int64_t elapsed_ms = (esp_timer_get_time() - s_thinking_start) / 1000;
+
+            if(s_thinking_phase == 0 && elapsed_ms >= 500){
+                // original → LEFT (0.5s transition)
+                s_thinking_phase = 1;
+                current_expr = EXPR_LEFT_IDX;
+                apply(current_expr);
+            } else if(s_thinking_phase == 1 && elapsed_ms >= 1500){
+                // hold LEFT for 1s
+                s_thinking_phase = 2;
+                current_expr = EXPR_RIGHT_IDX;
+                apply(current_expr);
+            } else if(s_thinking_phase == 2 && elapsed_ms >= 2000){
+                // LEFT → RIGHT (0.5s transition)
+                s_thinking_phase = 3;
+            } else if(s_thinking_phase == 3 && elapsed_ms >= 3000){
+                // hold RIGHT for 1s, then transition back to original (0.5s)
+                s_thinking_phase = 4;
+                current_expr = s_thinking_base;
+                apply(current_expr);
+            } else if(s_thinking_phase == 4 && elapsed_ms >= 3500){
+                // thinking animation complete (3.5s total)
+                s_thinking_phase = 0;
+                s_thinking = false;
+                target_expr = s_thinking_base;
+            }
+        } else if(target_expr != current_expr){
             current_expr = target_expr;
             apply(current_expr);
         }
+
+        int64_t loop_start = esp_timer_get_time();
+
         lv_timer_handler();
-        s_frame_count++;
-        // Update FPS every second
+
+        // Measure active time spent in lv_timer_handler
+        int64_t loop_end = esp_timer_get_time();
+        s_cpu_active_us += (loop_end - loop_start);
+
+        // Update FPS and CPU every second
         int64_t now_us = esp_timer_get_time();
+        if (now_us - s_cpu_last_update >= 1000000) {
+            // CPU: active time / total time in last second
+            s_cpu_usage = (uint8_t)((s_cpu_active_us * 100) / 1000000);
+            s_cpu_active_us = 0;
+            s_cpu_last_update = now_us;
+        }
         if (now_us - s_fps_last_update >= 1000000) {
-            s_fps_avg = s_frame_count;
-            s_frame_count = 0;
+            s_fps_avg = s_flush_count;
+            s_flush_count = 0;
             s_fps_last_update = now_us;
         }
         vTaskDelay(pdMS_TO_TICKS(10));

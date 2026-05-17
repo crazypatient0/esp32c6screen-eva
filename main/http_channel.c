@@ -22,11 +22,11 @@ static const char *TAG = "http_channel";
 static httpd_handle_t server = NULL;
 static QueueHandle_t s_input_queue = NULL;
 
-#define EXPR_COUNT 11
+#define EXPR_COUNT 10
 
 static const char *EXPR_NAMES[EXPR_COUNT] = {
     "neutral", "happy", "wink", "surprised", "sleepy",
-    "look-left", "look-right", "suspicious", "cry", "oops", "sad"
+    "thinking", "suspicious", "cry", "oops", "sad"
 };
 
 #if 0
@@ -437,8 +437,7 @@ static esp_err_t index_handler(httpd_req_t *req)
 "var pollTimer=null;"
 "var lastResp='';"
 "var typingId=null;"
-"var EXPRS=['neutral','happy','wink','surprised','sleepy',"
-"'look-left','look-right','suspicious','cry','oops','sad'];"
+"var EXPRS=['neutral','happy','wink','surprised','sleepy','thinking','suspicious','cry','oops','sad'];"
 
 "function $(id){return document.getElementById(id)}"
 
@@ -617,8 +616,7 @@ static esp_err_t status_handler(httpd_req_t *req)
 
     // LVGL FPS and CPU
     uint32_t fps_avg = lvgl_fps_avg_get();
-    uint8_t timer_idle = lv_timer_get_idle();
-    uint32_t cpu_usage = (timer_idle >= 100) ? 0 : (100 - timer_idle);
+    uint8_t cpu_usage = display_cpu_usage_get();
     cJSON_AddNumberToObject(root, "fps", fps_avg);
     cJSON_AddNumberToObject(root, "cpu", cpu_usage);
 
@@ -748,23 +746,26 @@ static esp_err_t expr_play_handler(httpd_req_t *req)
     // Save current (set) expression before playing
     int saved_expr = display_get_expr();
 
-    // Play animation: set_expr ->(500ms)-> play_expr ->(delay)-> set_expr ->(500ms)-> ...
-    // Each cycle: 500ms transition to play, hold delay, 500ms transition back
     for (int i = 0; i < count; i++) {
-        // Transition from set to play expression (takes 500ms)
+        // Trigger animation (for thinking: runs full 3s sequence internally)
         display_set_expr(id);
-        vTaskDelay(pdMS_TO_TICKS(500));
 
-        // Hold play expression for delay seconds
-        vTaskDelay(pdMS_TO_TICKS(delay_ms));
+        // Wait for animation to finish (thinking: s_thinking goes false after 3s)
+        while (display_is_thinking()) {
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
 
-        // Transition back to set expression (takes 500ms)
-        display_set_expr(saved_expr);
-        vTaskDelay(pdMS_TO_TICKS(500));
+        // Interval between cycles
+        if (i + 1 < count && delay_ms > 0) {
+            vTaskDelay(pdMS_TO_TICKS(delay_ms));
+        }
     }
-    // Already restored to saved_expr after last cycle
 
-    snprintf(result, sizeof(result), "Played %s x%d (hold %dms), restored to %s",
+    // Restore saved expression after all cycles done
+    display_set_expr(saved_expr);
+    vTaskDelay(pdMS_TO_TICKS(300));
+
+    snprintf(result, sizeof(result), "Played %s x%d (interval %dms), restored to %s",
              EXPR_NAMES[id], count, delay_ms, EXPR_NAMES[saved_expr]);
 
     cJSON *resp = cJSON_CreateObject();

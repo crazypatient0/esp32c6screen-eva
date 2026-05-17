@@ -41,7 +41,13 @@ __pycache__/
 *.py[cod]
 .env
 
+# Local documentation (for agent reference only)
+docs/
+docs-site/
+
 # Editor backup files
 *~
 *.swp
 *.swo
+# Added by code-review-graph
+.code-review-graph/

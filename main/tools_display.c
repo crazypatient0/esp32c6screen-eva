@@ -15,8 +15,8 @@ bool tools_set_expression_handler(const cJSON *input, char *result, size_t resul
     }
 
     int id = id_item->valueint;
-    if (id < 0 || id > 10) {
-        snprintf(result, result_len, "Error: expression id must be 0-10");
+    if (id < 0 || id > 9) {
+        snprintf(result, result_len, "Error: expression id must be 0-9");
         return false;
     }
 
@@ -24,7 +24,7 @@ bool tools_set_expression_handler(const cJSON *input, char *result, size_t resul
 
     static const char *names[] = {
         "neutral", "happy ∩∩", "wink", "surprised O_O", "sleepy __",
-        "looking left", "looking right", "suspicious",
+        "thinking ↔", "suspicious",
         "cry T_T", "oops >.<", "sad ∪∪"
     };
     snprintf(result, result_len, "Expression changed to %s (%d)", names[id], id);
