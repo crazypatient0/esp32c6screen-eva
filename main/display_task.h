@@ -36,3 +36,8 @@ uint8_t display_cpu_usage_get(void);
 // Stored at ex[] indices 10 and 11
 #define EXPR_LEFT_IDX   10
 #define EXPR_RIGHT_IDX  11
+
+// Internal only - used by suspicious animation, not exposed in UI
+// Stored at ex[] indices 12 and 13
+#define EXPR_SUSP_LEFT_IDX   12
+#define EXPR_SUSP_RIGHT_IDX  13

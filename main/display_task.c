@@ -36,26 +36,32 @@ static int64_t s_thinking_start;        // esp_timer time when thinking started
 static int s_thinking_base;            // expression to return to after thinking
 static int s_thinking_phase = 0;       // 0=→left, 1=hold-left, 2=→right, 3=hold-right, 4=done
 
+// Suspicious animation state
+static bool s_suspicious = false;
+static int64_t s_suspicious_start;     // esp_timer time when suspicious started
+static int s_suspicious_base;         // expression to return to after suspicious
+static int s_suspicious_phase = 0;     // 0=→susp-left, 1=hold-susp-left, 2=→susp-right, 3=hold-susp-right, 4=done
+
 // Extern for LVGL display
 extern lv_disp_t *disp;
 
-// Expression data: w,h,x,y,r ×2
-// Expression data: w,h,x,y,r ×2
-// Public IDs: 0-9. Internal (thinking animation): indices 10-11.
+// Public IDs: 0-9. Internal (thinking animation): indices 10-11. Internal (suspicious animation): 12-13.
 // is_line checks: a==1||a==8||a==9 (happy,cry,oops). sad(10) uses lines too.
-static const int16_t ex[12][10] = {
+static const int16_t ex[14][10] = {
     {90,50,35,61,15, 90,50,195,61,15},     // 0 neutral
     {0,0,0,0,0, 0,0,0,0,0},                // 1 ∩∩ happy
     {90,50,35,61,15, 90,6,195,83,3},       // 2 wink
     {120,75,20,49,25, 120,75,180,49,25},   // 3 surprised
     {80,10,40,81,5, 80,10,200,81,5},       // 4 sleepy
     {0,0,0,0,0, 0,0,0,0,0},                // 5 thinking (placeholder, not rendered directly)
-    {70,35,35,69,12, 95,50,195,61,15},     // 6 suspicious
+    {70,35,35,69,12, 95,50,195,61,15},     // 6 suspicious (left-heavy)
     {0,0,0,0,0, 0,0,0,0,0},                // 7 T_T cry
     {0,0,0,0,0, 0,0,0,0,0},                // 8 >.< oops
     {0,0,0,0,0, 0,0,0,0,0},                // 9 ∪∪ sad (uses s1-s8 lines)
     {75,45,15,64,15, 75,45,175,64,15},     // 10 left (thinking internal)
     {75,45,55,64,15, 75,45,215,64,15},     // 11 right (thinking internal)
+    {70,35,35,69,12, 95,50,195,61,15},     // 12 susp-left (left eye small)
+    {95,50,23,61,15, 70,35,207,69,12},     // 13 susp-right (left eye big, right eye small)
 };
 
 // Line objects for expressions
@@ -130,16 +136,24 @@ void display_set_expr(int id){
         s_thinking_phase = 0;
         s_thinking_start = esp_timer_get_time();
         target_expr = EXPR_LEFT_IDX;
+    } else if(id == EXPR_SUSPICIOUS){
+        // Start suspicious animation from current expression
+        s_suspicious_base = current_expr;
+        s_suspicious = true;
+        s_suspicious_phase = 0;
+        s_suspicious_start = esp_timer_get_time();
+        target_expr = EXPR_SUSP_LEFT_IDX;
     } else {
-        // Any non-thinking expression cancels any in-progress thinking
+        // Any non-thinking/non-suspicious expression cancels any in-progress animations
         s_thinking = false;
+        s_suspicious = false;
         target_expr = id;
     }
 }
 
 int display_get_expr(void){ return current_expr; }
 
-bool display_is_thinking(void){ return s_thinking; }
+bool display_is_thinking(void){ return s_thinking || s_suspicious; }
 
 static void display_task(void *arg){
     // Initialize LVGL
@@ -258,6 +272,38 @@ static void display_task(void *arg){
                 s_thinking_phase = 0;
                 s_thinking = false;
                 target_expr = s_thinking_base;
+            }
+        } else if(s_suspicious){
+            // Handle suspicious animation state machine
+            // 0-0.5s: base → susp-left (transition)
+            // 0.5-1.5s: hold susp-left
+            // 1.5-2s: susp-left → susp-right (transition)
+            // 2-3s: hold susp-right
+            // 3-3.5s: susp-right → base (transition)
+            int64_t elapsed_ms = (esp_timer_get_time() - s_suspicious_start) / 1000;
+
+            if(s_suspicious_phase == 0 && elapsed_ms >= 500){
+                // transition: base → susp-left complete, enter hold
+                s_suspicious_phase = 1;
+                current_expr = EXPR_SUSP_LEFT_IDX;
+                apply(current_expr);
+            } else if(s_suspicious_phase == 1 && elapsed_ms >= 1500){
+                // transition: susp-left → susp-right complete, enter hold
+                s_suspicious_phase = 2;
+                current_expr = EXPR_SUSP_RIGHT_IDX;
+                apply(current_expr);
+            } else if(s_suspicious_phase == 2 && elapsed_ms >= 2000){
+                // done holding susp-right, begin return to base
+                s_suspicious_phase = 3;
+            } else if(s_suspicious_phase == 3 && elapsed_ms >= 3000){
+                // transition: return to base complete, begin final hold
+                s_suspicious_phase = 4;
+                current_expr = s_suspicious_base;
+                apply(current_expr);
+            } else if(s_suspicious_phase == 4 && elapsed_ms >= 3500){
+                s_suspicious_phase = 0;
+                s_suspicious = false;
+                target_expr = s_suspicious_base;
             }
         } else if(target_expr != current_expr){
             current_expr = target_expr;
