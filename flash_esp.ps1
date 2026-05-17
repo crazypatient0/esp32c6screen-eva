@@ -14,7 +14,6 @@ $env:IDF_TOOLS_PATH = "D:\Espressif"
 $env:IDF_PYTHON_ENV_PATH = "D:\Espressif\python_env\idf5.5_py3.11_env"
 $env:PYTHONPATH = "D:\espidf\tools"
 
-# Full toolchain PATH - RISC-V for ESP32-C6
 $env:PATH = (
     "D:\espidf\tools;" +
     "D:\Espressif\tools\cmake\3.30.2\bin;" +
@@ -31,8 +30,36 @@ Set-Location E:\esp32c6screen-eva
 $python = "D:\Espressif\python_env\idf5.5_py3.11_env\Scripts\python.exe"
 $idfPy = "D:\espidf\tools\idf.py"
 
-Write-Host "=== Flashing to ESP32-C6 on COM4 ==="
-& $python $idfPy -p COM4 flash 2>&1 | Select-Object -Last 80
+Write-Host "=== MSYSTEM check: $($env:MSYSTEM) ==="
+Write-Host "=== IDF_PATH: $env:IDF_PATH ==="
+
+# Detect port
+$ports = @("COM4", "COM5", "COM3", "COM6")
+$port = $null
+foreach ($p in $ports) {
+    $test = Get-WmiObject Win32_SerialPort | Where-Object { $_.DeviceID -eq $p }
+    if ($test) { $port = $p; break }
+}
+if (-not $port) {
+    $allPorts = Get-WmiObject Win32_SerialPort
+    if ($allPorts) { $port = $allPorts[0].DeviceID }
+}
+if (-not $port) { $port = "COM4" }
+Write-Host "Using port: $port"
+
+# Clean previous build artifacts but keep sdkconfig
+Write-Host ""
+Write-Host "=== Building ==="
+& $python $idfPy build 2>&1 | Select-Object -Last 50
 $rc = $LASTEXITCODE
-Write-Host "Flash exit: $rc"
-exit $rc
+if ($rc -ne 0) {
+    Write-Host "BUILD FAILED: $rc"
+    exit $rc
+}
+
+Write-Host ""
+Write-Host "=== Flashing to $port ==="
+& $python $idfPy -p $port flash 2>&1 | Select-Object -Last 50
+$rc2 = $LASTEXITCODE
+Write-Host "Flash exit: $rc2"
+exit $rc2

@@ -850,13 +850,35 @@ static esp_err_t config_llm_set_handler(httpd_req_t *req)
         memory_set("llm_backend", backend->valuestring);
     }
     if (api_url && cJSON_IsString(api_url) && strlen(api_url->valuestring) > 0) {
-        memory_set("llm_api_url", api_url->valuestring);
+        char trimmed[256];
+        int in_len = strlen(api_url->valuestring);
+        if (in_len >= (int)sizeof(trimmed)) in_len = sizeof(trimmed) - 1;
+        int start = 0, end = in_len - 1;
+        while (start < in_len && (api_url->valuestring[start] == ' ' || api_url->valuestring[start] == '\t'))
+            start++;
+        while (end >= start && (api_url->valuestring[end] == ' ' || api_url->valuestring[end] == '\t'))
+            end--;
+        int out_len = end - start + 1;
+        memcpy(trimmed, api_url->valuestring + start, out_len);
+        trimmed[out_len] = '\0';
+        memory_set("llm_api_url", trimmed);
     }
     if (model && cJSON_IsString(model) && strlen(model->valuestring) > 0) {
         memory_set("llm_model", model->valuestring);
     }
     if (api_key && cJSON_IsString(api_key) && strlen(api_key->valuestring) > 0) {
-        memory_set("api_key", api_key->valuestring);
+        char trimmed[256];
+        int in_len = strlen(api_key->valuestring);
+        if (in_len >= (int)sizeof(trimmed)) in_len = sizeof(trimmed) - 1;
+        int start = 0, end = in_len - 1;
+        while (start < in_len && (api_key->valuestring[start] == ' ' || api_key->valuestring[start] == '\t'))
+            start++;
+        while (end >= start && (api_key->valuestring[end] == ' ' || api_key->valuestring[end] == '\t'))
+            end--;
+        int out_len = end - start + 1;
+        memcpy(trimmed, api_key->valuestring + start, out_len);
+        trimmed[out_len] = '\0';
+        memory_set("api_key", trimmed);
     }
 
     cJSON_Delete(root);

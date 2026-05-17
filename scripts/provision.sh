@@ -1198,10 +1198,10 @@ trap 'rm -rf "$tmpdir"' EXIT
     printf "wifi_ssid,data,string,%s\n" "$(csv_escape "$WIFI_SSID")"
     printf "wifi_pass,data,string,%s\n" "$(csv_escape "$WIFI_PASS")"
     printf "llm_backend,data,string,%s\n" "$(csv_escape "$BACKEND")"
-    printf "api_key,data,string,%s\n" "$(csv_escape "$API_KEY")"
+    printf "api_key,data,string,%s\n" "$(csv_escape "$(echo -n "$API_KEY" | tr -d ' \t')")"
     printf "llm_model,data,string,%s\n" "$(csv_escape "$MODEL")"
     if [ -n "$API_URL" ]; then
-        printf "llm_api_url,data,string,%s\n" "$(csv_escape "$API_URL")"
+        printf "llm_api_url,data,string,%s\n" "$(csv_escape "$(echo -n "$API_URL" | tr -d ' \t')")"
     fi
 
     if [ -n "$TG_TOKEN" ]; then
