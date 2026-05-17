@@ -620,6 +620,8 @@ static const char *get_stub_response(const char *request_json)
 
 esp_err_t llm_request(const char *request_json, char *response_buf, size_t response_buf_size)
 {
+    ESP_LOGI(TAG, "[DIAG] llm_request called, buf_size=%d", (int)response_buf_size);
+
     if (!request_json || !response_buf || response_buf_size == 0) {
         ESP_LOGE(TAG, "Invalid llm_request arguments");
         return ESP_ERR_INVALID_ARG;
@@ -729,8 +731,11 @@ esp_err_t llm_request(const char *request_json, char *response_buf, size_t respo
     esp_http_client_set_post_field(client, request_json, strlen(request_json));
 
     ESP_LOGI(TAG, "Sending request to %s...", llm_backend_name(s_backend));
+    ESP_LOGI(TAG, "[DIAG] HTTP perform starting (url=%s)...", llm_get_api_url());
 
     esp_err_t err = esp_http_client_perform(client);
+
+    ESP_LOGI(TAG, "[DIAG] HTTP perform done, err=%d", err);
 
     if (err == ESP_OK) {
         status = esp_http_client_get_status_code(client);

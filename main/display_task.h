@@ -11,6 +11,9 @@ void display_set_expr(int id);
 // Get current expression
 int display_get_expr(void);
 
+// Get LVGL FPS average (frames per second, updated once per second)
+uint32_t lvgl_fps_avg_get(void);
+
 // List of expressions
 #define EXPR_NEUTRAL    0
 #define EXPR_HAPPY      1

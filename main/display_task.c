@@ -1,9 +1,19 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "esp_timer.h"
 #include "ST7789.h"
 #include "RGB.h"
 #include "LVGL_Driver.h"
 #include "display_task.h"
+
+// Frame counter for web UI FPS display
+static uint32_t s_frame_count = 0;
+static uint32_t s_fps_avg = 0;
+static int64_t s_fps_last_update = 0;
+
+uint32_t lvgl_fps_avg_get(void) {
+    return s_fps_avg;
+}
 
 // Expression state
 static int current_expr = EXPR_NEUTRAL;
@@ -186,6 +196,14 @@ static void display_task(void *arg){
             apply(current_expr);
         }
         lv_timer_handler();
+        s_frame_count++;
+        // Update FPS every second
+        int64_t now_us = esp_timer_get_time();
+        if (now_us - s_fps_last_update >= 1000000) {
+            s_fps_avg = s_frame_count;
+            s_frame_count = 0;
+            s_fps_last_update = now_us;
+        }
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 }

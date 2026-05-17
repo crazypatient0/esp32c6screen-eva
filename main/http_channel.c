@@ -12,6 +12,8 @@
 #include "memory.h"
 #include "llm.h"
 #include "display_task.h"
+#include "LVGL_Driver.h"
+#include "lvgl.h"
 #include "nvs_keys.h"
 #include <string.h>
 #include <stdio.h>
@@ -358,6 +360,8 @@ static esp_err_t index_handler(httpd_req_t *req)
 "<div class=\"stat\"><div class=\"l\">WiFi</div><div class=\"v\" id=\"wifi\">--</div></div>"
 "<div class=\"stat\"><div class=\"l\">Signal</div><div class=\"v\" id=\"rssi\">--</div></div>"
 "<div class=\"stat\"><div class=\"l\">Face</div><div class=\"v\" id=\"expr\">--</div></div>"
+"<div class=\"stat\"><div class=\"l\">FPS</div><div class=\"v\" id=\"fps\">--</div></div>"
+"<div class=\"stat\"><div class=\"l\">CPU</div><div class=\"v\" id=\"cpu\">--</div></div>"
 "<div class=\"stat\"><div class=\"l\">LLM</div><div class=\"v\" id=\"llm-status\">--</div></div>"
 "</div>"
 
@@ -469,7 +473,7 @@ static esp_err_t index_handler(httpd_req_t *req)
 "var h=d.free_heap;var v=$('heap');v.textContent=fmt(h);v.className='v '+(h>80000?'good':h>40000?'warn':'bad');"
 "$('uptime').textContent=fmtUptime(d.uptime_ms);$('wifi').textContent=d.wifi_ssid||'--';"
 "var rssi=d.rssi;var r=$('rssi');r.textContent=rssi||'--';r.className='v '+(rssi>-50?'good':rssi>-70?'warn':'bad');"
-"$('expr').textContent=d.expression||'--';$('ver').textContent='v'+(d.version||'?');"
+"$('expr').textContent=d.expression||'--';$('fps').textContent=(d.fps!=null?d.fps:'--');$('cpu').textContent=(d.cpu!=null?d.cpu+'%':'--');$('ver').textContent='v'+(d.version||'?');"
 "$('conn-dot').className='conn-dot connected';$('conn-status').textContent='Online'}).catch(function(){"
 "$('conn-dot').className='conn-dot';$('conn-status').textContent='Offline'})}"
 
@@ -610,6 +614,13 @@ static esp_err_t status_handler(httpd_req_t *req)
     // Uptime
     int64_t uptime_ms = esp_timer_get_time() / 1000;
     cJSON_AddNumberToObject(root, "uptime_ms", uptime_ms);
+
+    // LVGL FPS and CPU
+    uint32_t fps_avg = lvgl_fps_avg_get();
+    uint8_t timer_idle = lv_timer_get_idle();
+    uint32_t cpu_usage = (timer_idle >= 100) ? 0 : (100 - timer_idle);
+    cJSON_AddNumberToObject(root, "fps", fps_avg);
+    cJSON_AddNumberToObject(root, "cpu", cpu_usage);
 
     // Version
     cJSON_AddStringToObject(root, "version", "2.13.0");
