@@ -7,6 +7,9 @@
 #include "display_task.h"
 
 // Frame counter for web UI FPS display (actual flushes, not loop iterations)
+static const char *TAG_DISP = "display";
+
+// Frame counter for web UI FPS display (actual flushes, not loop iterations)
 static uint32_t s_fps_avg = 0;
 static int64_t s_fps_last_update = 0;
 
@@ -30,17 +33,24 @@ uint8_t display_cpu_usage_get(void) {
 static int current_expr = EXPR_NEUTRAL;
 static int target_expr = EXPR_NEUTRAL;
 
-// Thinking animation state
+// Thinking animation state (5-phase, unchanged)
 static bool s_thinking = false;
-static int64_t s_thinking_start;        // esp_timer time when thinking started
-static int s_thinking_base;            // expression to return to after thinking
-static int s_thinking_phase = 0;       // 0=→left, 1=hold-left, 2=→right, 3=hold-right, 4=done
+static int64_t s_thinking_start;
+static int s_thinking_base;
+static int s_thinking_phase = 0;
 
-// Suspicious animation state
+// Suspicious animation state (5-phase, unchanged)
 static bool s_suspicious = false;
-static int64_t s_suspicious_start;     // esp_timer time when suspicious started
-static int s_suspicious_base;         // expression to return to after suspicious
-static int s_suspicious_phase = 0;     // 0=→susp-left, 1=hold-susp-left, 2=→susp-right, 3=hold-susp-right, 4=done
+static int64_t s_suspicious_start;
+static int s_suspicious_base;
+static int s_suspicious_phase = 0;
+
+// Unified expression play animation for non-thinking/non-suspicious expressions (3-phase)
+static bool s_playing = false;
+static int64_t s_playing_start;
+static int s_playing_base;
+static int s_playing_target;
+static int s_playing_phase = 0;
 
 // Extern for LVGL display
 extern lv_disp_t *disp;
@@ -129,13 +139,22 @@ static void apply(int a){
 void display_set_expr(int id){
     if(id < 0 || id > 9) return;  // public IDs 0-9 only
 
+    ESP_LOGI(TAG_DISP, "display_set_expr called: id=%d, current_expr=%d, target_expr=%d, s_thinking=%d, s_suspicious=%d",
+             id, current_expr, target_expr, s_thinking, s_suspicious);
+
     if(id == EXPR_THINKING){
         // Start thinking animation from current expression
+        // If already thinking, ignore re-trigger to prevent restart loops
+        if (s_thinking) {
+            ESP_LOGI(TAG_DISP, "thinking already in progress, ignoring re-trigger");
+            return;
+        }
         s_thinking_base = current_expr;
         s_thinking = true;
         s_thinking_phase = 0;
         s_thinking_start = esp_timer_get_time();
         target_expr = EXPR_LEFT_IDX;
+        ESP_LOGI(TAG_DISP, "thinking started from expr=%d", s_thinking_base);
     } else if(id == EXPR_SUSPICIOUS){
         // Start suspicious animation from current expression
         s_suspicious_base = current_expr;
@@ -143,12 +162,43 @@ void display_set_expr(int id){
         s_suspicious_phase = 0;
         s_suspicious_start = esp_timer_get_time();
         target_expr = EXPR_SUSP_LEFT_IDX;
+        ESP_LOGI(TAG_DISP, "suspicious started from expr=%d", s_suspicious_base);
     } else {
-        // Any non-thinking/non-suspicious expression cancels any in-progress animations
+        // Immediate set: cancel any in-progress animations and apply expression directly
         s_thinking = false;
         s_suspicious = false;
+        s_playing = false;
+        current_expr = id;
         target_expr = id;
+        apply(current_expr);
+        ESP_LOGI(TAG_DISP, "set_expr id=%d (immediate)", id);
     }
+}
+
+void display_play_expr(int id){
+    if(id < 0 || id > 9) return;  // public IDs 0-9 only
+
+    // Cancel any in-progress animations
+    s_thinking = false;
+    s_suspicious = false;
+
+    // thinking/suspicious have their own 5-phase animation triggered via display_set_expr
+    if(id == EXPR_THINKING || id == EXPR_SUSPICIOUS){
+        display_set_expr(id);
+        return;
+    }
+
+    // Non-thinking/non-suspicious: play unified 3-phase animation
+    // Phase 0 (0-0.5s): base → target (transition)
+    // Phase 1 (0.5-1.5s): hold target
+    // Phase 2 (1.5-2.0s): target → base (return)
+    s_playing_base = current_expr;
+    s_playing_target = id;
+    s_playing = true;
+    s_playing_phase = 0;
+    s_playing_start = esp_timer_get_time();
+    target_expr = id;
+    ESP_LOGI(TAG_DISP, "play_expr id=%d: %d → %d → %d", id, s_playing_base, s_playing_target, s_playing_base);
 }
 
 int display_get_expr(void){ return current_expr; }
@@ -251,27 +301,33 @@ static void display_task(void *arg){
 
             if(s_thinking_phase == 0 && elapsed_ms >= 500){
                 // original → LEFT (0.5s transition)
+                if (!s_thinking) break;
                 s_thinking_phase = 1;
                 current_expr = EXPR_LEFT_IDX;
                 apply(current_expr);
             } else if(s_thinking_phase == 1 && elapsed_ms >= 1500){
-                // hold LEFT for 1s
+                // hold LEFT for 1s, then transition to RIGHT
+                if (!s_thinking) break;
                 s_thinking_phase = 2;
                 current_expr = EXPR_RIGHT_IDX;
                 apply(current_expr);
             } else if(s_thinking_phase == 2 && elapsed_ms >= 2000){
-                // LEFT → RIGHT (0.5s transition)
+                // hold RIGHT for 0.5s
+                if (!s_thinking) break;
                 s_thinking_phase = 3;
             } else if(s_thinking_phase == 3 && elapsed_ms >= 3000){
-                // hold RIGHT for 1s, then transition back to original (0.5s)
+                // hold RIGHT for 1s, then begin return to base
+                if (!s_thinking) break;
                 s_thinking_phase = 4;
-                current_expr = s_thinking_base;
-                apply(current_expr);
             } else if(s_thinking_phase == 4 && elapsed_ms >= 3500){
                 // thinking animation complete (3.5s total)
+                if (!s_thinking) break;
                 s_thinking_phase = 0;
                 s_thinking = false;
+                ESP_LOGI(TAG_DISP, "thinking done, returning to expr=%d", s_thinking_base);
+                current_expr = s_thinking_base;
                 target_expr = s_thinking_base;
+                apply(current_expr);
             }
         } else if(s_suspicious){
             // Handle suspicious animation state machine
@@ -284,26 +340,60 @@ static void display_task(void *arg){
 
             if(s_suspicious_phase == 0 && elapsed_ms >= 500){
                 // transition: base → susp-left complete, enter hold
+                if (!s_suspicious) break;
                 s_suspicious_phase = 1;
                 current_expr = EXPR_SUSP_LEFT_IDX;
                 apply(current_expr);
             } else if(s_suspicious_phase == 1 && elapsed_ms >= 1500){
                 // transition: susp-left → susp-right complete, enter hold
+                if (!s_suspicious) break;
                 s_suspicious_phase = 2;
                 current_expr = EXPR_SUSP_RIGHT_IDX;
                 apply(current_expr);
             } else if(s_suspicious_phase == 2 && elapsed_ms >= 2000){
-                // done holding susp-right, begin return to base
+                // hold susp-right, begin return to base
+                if (!s_suspicious) break;
                 s_suspicious_phase = 3;
             } else if(s_suspicious_phase == 3 && elapsed_ms >= 3000){
                 // transition: return to base complete, begin final hold
+                if (!s_suspicious) break;
                 s_suspicious_phase = 4;
-                current_expr = s_suspicious_base;
-                apply(current_expr);
             } else if(s_suspicious_phase == 4 && elapsed_ms >= 3500){
+                // suspicious animation complete
+                if (!s_suspicious) break;
                 s_suspicious_phase = 0;
                 s_suspicious = false;
+                ESP_LOGI(TAG_DISP, "suspicious done, returning to expr=%d", s_suspicious_base);
+                current_expr = s_suspicious_base;
                 target_expr = s_suspicious_base;
+                apply(current_expr);
+            }
+        } else if(s_playing){
+            // Handle unified 3-phase animation for non-thinking/non-suspicious expressions
+            // Phase 0 (0-0.5s): base → target (transition)
+            // Phase 1 (0.5-1.5s): hold target
+            // Phase 2 (1.5-2.0s): target → base (return)
+            int64_t elapsed_ms = (esp_timer_get_time() - s_playing_start) / 1000;
+
+            if(s_playing_phase == 0 && elapsed_ms >= 500){
+                // transition: base → target complete, enter hold
+                if (!s_playing) break;
+                s_playing_phase = 1;
+                current_expr = s_playing_target;
+                apply(current_expr);
+            } else if(s_playing_phase == 1 && elapsed_ms >= 1500){
+                // transition: target → base complete, animation done
+                if (!s_playing) break;
+                s_playing_phase = 2;
+            } else if(s_playing_phase == 2 && elapsed_ms >= 2000){
+                // playing animation complete
+                if (!s_playing) break;
+                s_playing_phase = 0;
+                s_playing = false;
+                ESP_LOGI(TAG_DISP, "playing done, returning to expr=%d", s_playing_base);
+                current_expr = s_playing_base;
+                target_expr = s_playing_base;
+                apply(current_expr);
             }
         } else if(target_expr != current_expr){
             current_expr = target_expr;

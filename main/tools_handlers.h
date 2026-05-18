@@ -64,4 +64,8 @@ bool tools_set_expression_handler(const cJSON *input, char *result, size_t resul
 // Servo
 bool tools_servo_set_handler(const cJSON *input, char *result, size_t result_len);
 
+// Web
+bool tools_web_fetch_handler(const cJSON *input, char *result, size_t result_len);
+bool tools_web_search_handler(const cJSON *input, char *result, size_t result_len);
+
 #endif // TOOLS_HANDLERS_H

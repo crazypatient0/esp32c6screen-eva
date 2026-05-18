@@ -379,6 +379,8 @@ static esp_err_t index_handler(httpd_req_t *req)
 "<input id=\"model\" placeholder=\"Model (e.g. gpt-4o)\">"
 "<div style=\"height:8px\"></div>"
 "<input id=\"api_key\" type=\"password\" placeholder=\"API Key\">"
+"<div style=\"height:6px\"></div>"
+"<input id=\"search_api_key\" type=\"password\" placeholder=\"Search API Key (Exa.ai, optional)\">"
 "<div style=\"height:10px\"></div>"
 "<button class=\"primary\" onclick=\"saveLLM()\">Save Config</button>"
 "<div id=\"cfg-show\" class=\"config-show\"></div>"
@@ -456,10 +458,10 @@ static esp_err_t index_handler(httpd_req_t *req)
 "else{clearInterval(typingId.timer);if(typingId&&typingId.parentNode){typingId.parentNode.removeChild(typingId)}typingId=null}}"
 
 "function saveLLM(){var b={backend:$('backend').value,api_url:$('api_url').value,"
-"model:$('model').value,api_key:$('api_key').value};"
+"model:$('model').value,api_key:$('api_key').value,search_api_key:$('search_api_key').value};"
 "fetch('/config/llm',{method:'POST',headers:{'Content-Type':'application/json'},"
 "body:JSON.stringify(b)}).then(function(r){return r.json()}).then(function(d){"
-"if(d.result==='ok'){addMsg('Config saved','bot');$('api_key').value='';loadLLMCfg()}"
+"if(d.result==='ok'){addMsg('Config saved','bot');$('api_key').value='';$('search_api_key').value='';loadLLMCfg()}"
 "else{addMsg('Save failed: '+JSON.stringify(d),'error')}}).catch(function(e){addMsg('Error: '+e,'error')})}"
 
 "function loadLLMCfg(){fetch('/config/llm').then(function(r){return r.json()}).then(function(d){"
@@ -747,15 +749,24 @@ static esp_err_t expr_play_handler(httpd_req_t *req)
     int saved_expr = display_get_expr();
 
     for (int i = 0; i < count; i++) {
-        // Trigger animation (for thinking: runs full 3s sequence internally)
-        display_set_expr(id);
-
-        // Wait for animation to finish (thinking: s_thinking goes false after 3s)
-        while (display_is_thinking()) {
-            vTaskDelay(pdMS_TO_TICKS(50));
+        // Trigger expression or animation
+        if (id == EXPR_THINKING || id == EXPR_SUSPICIOUS) {
+            // thinking/suspicious: use display_set_expr (5-phase animation)
+            display_set_expr(id);
+            // Thinking/suspicious: display task manages the 5-phase animation loop (3.5s),
+            // wait for display_is_thinking() to go false
+            while (display_is_thinking()) {
+                vTaskDelay(pdMS_TO_TICKS(50));
+            }
+        } else {
+            // Non-thinking/non-suspicious: use display_play_expr (3-phase animation)
+            display_play_expr(id);
+            // Normal expression: display_play_expr manages 3-phase animation (2s total),
+            // wait for it to complete before next iteration
+            vTaskDelay(pdMS_TO_TICKS(2000));
         }
 
-        // Interval between cycles
+        // delay_ms: hold this expression for the specified interval before next cycle
         if (i + 1 < count && delay_ms > 0) {
             vTaskDelay(pdMS_TO_TICKS(delay_ms));
         }
@@ -817,6 +828,20 @@ static esp_err_t config_llm_get_handler(httpd_req_t *req)
         }
     }
 
+    // Search API key (Exa) - masked
+    if (memory_get("exa_api_key", val, sizeof(val))) {
+        if (strlen(val) > 4) {
+            char masked[64];
+            int ml = strlen(val) - 4;
+            memset(masked, '*', ml);
+            masked[ml] = '\0';
+            strcat(masked, val + ml);
+            cJSON_AddStringToObject(root, "search_api_key", masked);
+        } else {
+            cJSON_AddStringToObject(root, "search_api_key", "****");
+        }
+    }
+
     char *json = cJSON_PrintUnformatted(root);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_send(req, json, strlen(json));
@@ -845,6 +870,7 @@ static esp_err_t config_llm_set_handler(httpd_req_t *req)
     cJSON *api_url = cJSON_GetObjectItem(root, "api_url");
     cJSON *model = cJSON_GetObjectItem(root, "model");
     cJSON *api_key = cJSON_GetObjectItem(root, "api_key");
+    cJSON *search_api_key = cJSON_GetObjectItem(root, "search_api_key");
 
     if (backend && cJSON_IsString(backend)) {
         memory_set("llm_backend", backend->valuestring);
@@ -879,6 +905,20 @@ static esp_err_t config_llm_set_handler(httpd_req_t *req)
         memcpy(trimmed, api_key->valuestring + start, out_len);
         trimmed[out_len] = '\0';
         memory_set("api_key", trimmed);
+    }
+    if (search_api_key && cJSON_IsString(search_api_key) && strlen(search_api_key->valuestring) > 0) {
+        char trimmed[256];
+        int in_len = strlen(search_api_key->valuestring);
+        if (in_len >= (int)sizeof(trimmed)) in_len = sizeof(trimmed) - 1;
+        int start = 0, end = in_len - 1;
+        while (start < in_len && (search_api_key->valuestring[start] == ' ' || search_api_key->valuestring[start] == '\t'))
+            start++;
+        while (end >= start && (search_api_key->valuestring[end] == ' ' || search_api_key->valuestring[end] == '\t'))
+            end--;
+        int out_len = end - start + 1;
+        memcpy(trimmed, search_api_key->valuestring + start, out_len);
+        trimmed[out_len] = '\0';
+        memory_set("exa_api_key", trimmed);
     }
 
     cJSON_Delete(root);

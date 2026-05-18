@@ -5,8 +5,12 @@
 // Initialize display and start LVGL task
 void display_init(void);
 
-// Set expression (thread-safe, called from tools)
+// Set expression immediately (no animation, cancel in-progress animations)
 void display_set_expr(int id);
+
+// Play expression with 3-phase animation: base → id → return (non-thinking/non-suspicious only)
+// thinking/suspicious use their own 5-phase animation
+void display_play_expr(int id);
 
 // Get current expression
 int display_get_expr(void);

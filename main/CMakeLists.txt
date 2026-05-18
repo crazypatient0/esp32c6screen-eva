@@ -21,6 +21,7 @@ idf_component_register(
         "tools_persona.c"
         "tools_cron.c"
         "tools_system.c"
+        "tools_web.c"
         "memory.c"
         "json_util.c"
         "telegram.c"
@@ -57,6 +58,7 @@ idf_component_register(
         esp_http_server
         esp_netif
         esp-tls
+        mbedtls
         esp_timer
         json
         driver

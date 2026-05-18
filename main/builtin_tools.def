@@ -142,3 +142,13 @@ TOOL_ENTRY("servo_set",
            "Set a servo motor angle. id=0 or 1, angle=0-180 degrees.",
            "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":1},\"angle\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":180}},\"required\":[\"id\",\"angle\"]}",
            tools_servo_set_handler)
+
+// Web
+TOOL_ENTRY("web_search",
+           "Search the web via Exa API and return top results.",
+           "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"}},\"required\":[\"query\"]}",
+           tools_web_search_handler)
+TOOL_ENTRY("web_fetch",
+           "Fetch a URL and return its text content (HTML tags stripped).",
+           "{\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\",\"format\":\"uri\"}},\"required\":[\"url\"]}",
+           tools_web_fetch_handler)
