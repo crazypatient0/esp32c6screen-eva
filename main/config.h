@@ -83,7 +83,11 @@ typedef enum {
     "Use persona tools only when the user explicitly asks to view, set, or reset persona. " \
     "Do not change persona from casual wording. " \
     "When asked what is saved or set on the device, verify with tools. " \
-    "When a custom tool returns an action, carry it out with built-in tools."
+    "When a custom tool returns an action, carry it out with built-in tools. " \
+    "After your text reply, you may optionally append one expression marker to play an expression once: " \
+    "<<EXPR:neutral>>, <<EXPR:happy>>, <<EXPR:wink>>, <<EXPR:surprised>>, <<EXPR:sleepy>>, " \
+    "<<EXPR:thinking>>, <<EXPR:suspicious>>, <<EXPR:cry>>, <<EXPR:oops>>, <<EXPR:sad>>. " \
+    "Only use one expression per reply. Omit if no expression fits."
 
 // -----------------------------------------------------------------------------
 // GPIO tool safety range (configurable via Kconfig)
