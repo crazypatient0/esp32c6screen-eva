@@ -12,7 +12,6 @@
 #include "ratelimit.h"
 #include "memory.h"
 #include "nvs_keys.h"
-#include "telegram.h"
 #include "cJSON.h"
 #include "esp_timer.h"
 #include "esp_log.h"
@@ -29,7 +28,6 @@ static const char *TAG = "agent";
 // Queues
 static QueueHandle_t s_input_queue;
 static QueueHandle_t s_channel_output_queue;
-static QueueHandle_t s_telegram_output_queue;
 static int64_t s_last_start_response_us = 0;
 static int64_t s_last_non_command_response_us = 0;
 static char s_last_non_command_text[CHANNEL_RX_BUF_SIZE] = {0};
@@ -180,30 +178,14 @@ static bool queue_channel_response(const char *text)
     return false;
 }
 
-static void queue_telegram_response(const char *text, int64_t chat_id)
-{
-    if (!s_telegram_output_queue) {
-        return;
-    }
-
-    telegram_msg_t msg;
-    strncpy(msg.text, text, TELEGRAM_MAX_MSG_LEN - 1);
-    msg.text[TELEGRAM_MAX_MSG_LEN - 1] = '\0';
-    msg.chat_id = chat_id;
-
-    if (xQueueSend(s_telegram_output_queue, &msg, pdMS_TO_TICKS(1000)) != pdTRUE) {
-        ESP_LOGE(TAG, "Failed to send response to Telegram queue");
-    }
-}
-
 static void send_response(const char *text, int64_t chat_id)
 {
+    (void)chat_id;  // unused, kept for API compatibility
     // Mark response as delivered (even if queue is full and we used fallback direct write)
     s_pending_response = false;
     s_pending_response_start_us = 0;
 
     queue_channel_response(text);
-    queue_telegram_response(text, chat_id);
 }
 
 #ifndef TEST_BUILD
@@ -418,10 +400,8 @@ static void handle_settings_command(int64_t chat_id)
 
 static int64_t response_chat_id_for_source(message_source_t source, int64_t chat_id)
 {
-    if (source == MSG_SOURCE_TELEGRAM && chat_id != 0) {
-        return chat_id;
-    }
-    return 0;
+    (void)source;  // unused without Telegram
+    return chat_id;
 }
 
 // Process a single user message
@@ -434,7 +414,6 @@ static void process_message(const char *user_message, message_source_t source, i
     int history_turn_start = s_history_len;
     bool is_non_command_message = !agent_is_slash_command(user_message);
     bool is_cron_trigger = agent_is_cron_trigger_message(user_message);
-    bool telegram_polling_paused = false;
     request_metrics_t metrics = {
         .started_us = esp_timer_get_time(),
         .llm_us_total = 0,
@@ -534,9 +513,6 @@ static void process_message(const char *user_message, message_source_t source, i
     int tool_count;
     const tool_def_t *tools = tools_get_all(&tool_count);
 
-    telegram_pause_polling();
-    telegram_polling_paused = true;
-
     // Add user message to history
     history_add("user", user_message, false, false, NULL, NULL);
     ESP_LOGI(TAG, "[DIAG] history_len=%d after adding user msg", s_history_len);
@@ -562,8 +538,6 @@ static void process_message(const char *user_message, message_source_t source, i
             ESP_LOGE(TAG, "Failed to build request JSON");
             history_rollback_to(history_turn_start, "request build failed");
             send_response("Error: Failed to build request", reply_chat_id);
-            telegram_resume_polling();
-            telegram_polling_paused = false;
             metrics_log_request(&metrics, "request_build_error");
             return;
         }
@@ -578,8 +552,6 @@ static void process_message(const char *user_message, message_source_t source, i
             free(request);
             history_rollback_to(history_turn_start, "rate limited");
             send_response(rate_reason, reply_chat_id);
-            telegram_resume_polling();
-            telegram_polling_paused = false;
             metrics_log_request(&metrics, "rate_limited");
             return;
         }
@@ -655,8 +627,6 @@ static void process_message(const char *user_message, message_source_t source, i
             ESP_LOGI(TAG, "Sending error response to channel...");
             send_response("Error: Failed to contact LLM API after retries", reply_chat_id);
             ESP_LOGI(TAG, "Error response sent");
-            telegram_resume_polling();
-            telegram_polling_paused = false;
             metrics_log_request(&metrics, "llm_error");
             return;
         }
@@ -678,8 +648,6 @@ static void process_message(const char *user_message, message_source_t source, i
             history_rollback_to(history_turn_start, "llm response parse failed");
             send_response("Error: Failed to parse LLM response", reply_chat_id);
             json_free_parsed_response();
-            telegram_resume_polling();
-            telegram_polling_paused = false;
             metrics_log_request(&metrics, "parse_error");
             return;
         }
@@ -754,8 +722,6 @@ static void process_message(const char *user_message, message_source_t source, i
         ESP_LOGW(TAG, "Max tool rounds reached");
         history_add("assistant", "(Reached max tool iterations)", false, false, NULL, NULL);
         send_response("(Reached max tool iterations)", reply_chat_id);
-        telegram_resume_polling();
-        telegram_polling_paused = false;
         metrics_log_request(&metrics, "max_rounds");
         return;
     }
@@ -764,10 +730,6 @@ static void process_message(const char *user_message, message_source_t source, i
         strncpy(s_last_non_command_text, user_message, sizeof(s_last_non_command_text) - 1);
         s_last_non_command_text[sizeof(s_last_non_command_text) - 1] = '\0';
         s_last_non_command_response_us = esp_timer_get_time();
-    }
-
-    if (telegram_polling_paused) {
-        telegram_resume_polling();
     }
 
     metrics_log_request(&metrics, "success");
@@ -783,7 +745,6 @@ void agent_test_reset(void)
     memset(s_response_buf, 0, sizeof(s_response_buf));
     memset(s_tool_result_buf, 0, sizeof(s_tool_result_buf));
     s_channel_output_queue = NULL;
-    s_telegram_output_queue = NULL;
     s_last_start_response_us = 0;
     s_last_non_command_response_us = 0;
     memset(s_last_non_command_text, 0, sizeof(s_last_non_command_text));
@@ -793,11 +754,9 @@ void agent_test_reset(void)
     load_persona_from_store();
 }
 
-void agent_test_set_queues(QueueHandle_t channel_output_queue,
-                           QueueHandle_t telegram_output_queue)
+void agent_test_set_queues(QueueHandle_t channel_output_queue)
 {
     s_channel_output_queue = channel_output_queue;
-    s_telegram_output_queue = telegram_output_queue;
 }
 
 void agent_test_process_message(const char *user_message)
@@ -807,7 +766,8 @@ void agent_test_process_message(const char *user_message)
 
 void agent_test_process_message_for_chat(const char *user_message, int64_t reply_chat_id)
 {
-    process_message(user_message, MSG_SOURCE_TELEGRAM, reply_chat_id);
+    (void)reply_chat_id;  // unused
+    process_message(user_message, MSG_SOURCE_CHANNEL, 0);
 }
 #endif
 
@@ -827,8 +787,7 @@ static void agent_task(void *arg)
 }
 
 esp_err_t agent_start(QueueHandle_t input_queue,
-                      QueueHandle_t channel_output_queue,
-                      QueueHandle_t telegram_output_queue)
+                      QueueHandle_t channel_output_queue)
 {
     if (!input_queue || !channel_output_queue) {
         ESP_LOGE(TAG, "Invalid queues for agent startup");
@@ -837,7 +796,6 @@ esp_err_t agent_start(QueueHandle_t input_queue,
 
     s_input_queue = input_queue;
     s_channel_output_queue = channel_output_queue;
-    s_telegram_output_queue = telegram_output_queue;
     load_persona_from_store();
 
     if (xTaskCreate(agent_task, "agent", AGENT_TASK_STACK_SIZE, NULL,

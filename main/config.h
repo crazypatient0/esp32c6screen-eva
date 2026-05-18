@@ -37,7 +37,6 @@
 // -----------------------------------------------------------------------------
 #define INPUT_QUEUE_LENGTH      8
 #define OUTPUT_QUEUE_LENGTH     8
-#define TELEGRAM_OUTPUT_QUEUE_LENGTH 4
 
 // -----------------------------------------------------------------------------
 // LLM Backend Configuration
@@ -128,23 +127,9 @@ typedef enum {
 #define WIFI_RETRY_DELAY_MS     1000
 
 // -----------------------------------------------------------------------------
-// Telegram
+// Agent
 // -----------------------------------------------------------------------------
-#define TELEGRAM_API_URL        "https://api.telegram.org/bot"
-#define TELEGRAM_POLL_TIMEOUT   30      // Long polling timeout (seconds)
-// OpenRouter can require tighter heap headroom during TLS setup on small targets.
-// Use a shorter Telegram long-poll window only for that backend to reduce overlap.
-#define TELEGRAM_POLL_TIMEOUT_OPENROUTER 8
-// Classic ESP32 can exhaust/fragment heap when Telegram long-poll TLS overlaps with
-// outbound LLM HTTPS on the same device. Keep poll windows shorter on that target.
-#define TELEGRAM_POLL_TIMEOUT_ESP32 5
-#define TELEGRAM_POLL_INTERVAL  100     // ms between poll attempts on error
-#define TELEGRAM_MAX_MSG_LEN    4096    // Max message length
-#define TELEGRAM_FLUSH_ON_START 1       // Drop stale pending updates at startup
-#define TELEGRAM_STALE_POLL_LOG_INTERVAL 4          // Log every N stale-only polls
-#define TELEGRAM_STALE_POLL_RESYNC_STREAK 8         // Trigger auto-resync after this streak
-#define TELEGRAM_STALE_POLL_RESYNC_COOLDOWN_MS 60000 // Min gap between auto-resync attempts
-#define START_COMMAND_COOLDOWN_MS 30000 // Debounce repeated Telegram /start bursts
+#define START_COMMAND_COOLDOWN_MS 30000 // Debounce repeated /start command bursts
 #define MESSAGE_REPLAY_COOLDOWN_MS 20000 // Suppress repeated identical non-command bursts
 
 // -----------------------------------------------------------------------------

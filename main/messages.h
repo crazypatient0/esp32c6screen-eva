@@ -6,7 +6,6 @@
 
 typedef enum {
     MSG_SOURCE_CHANNEL = 0,
-    MSG_SOURCE_TELEGRAM = 1,
     MSG_SOURCE_CRON = 2,
 } message_source_t;
 
@@ -21,10 +20,5 @@ typedef struct {
 typedef struct {
     char text[CHANNEL_TX_BUF_SIZE];
 } channel_output_msg_t;
-
-typedef struct {
-    char text[TELEGRAM_MAX_MSG_LEN];
-    int64_t chat_id;
-} telegram_msg_t;
 
 #endif // MESSAGES_H
