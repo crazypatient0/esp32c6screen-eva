@@ -438,6 +438,30 @@ fail:
     return NULL;
 }
 
+// Helper: scan text for <<EXPR:xxx>> markers, append found ones to expr_out.
+// Returns number of markers found.
+static int extract_expr_markers_from_text(const char *text, char *expr_out, size_t expr_out_len)
+{
+    if (!text || !expr_out || expr_out_len == 0) return 0;
+    int count = 0;
+    const char *p = text;
+    size_t written = strlen(expr_out);
+    size_t remaining = expr_out_len - written;
+    while ((p = strstr(p, "<<EXPR:")) != NULL && remaining > 16) {
+        const char *end = strstr(p, ">>");
+        if (!end) break;
+        size_t marker_len = end - p + 2;
+        if (marker_len >= remaining) break;
+        memcpy(expr_out + written, p, marker_len);
+        written += marker_len;
+        remaining -= marker_len;
+        expr_out[written] = '\0';
+        count++;
+        p = end + 2;
+    }
+    return count;
+}
+
 static bool parse_openai_response(
     cJSON *root,
     char *text_out,
@@ -467,7 +491,8 @@ static bool parse_openai_response(
     if (content) {
         if (cJSON_IsString(content)) {
             // Plain string content (standard OpenAI format)
-            // Filter out <think>...</think> blocks (Claude/MiniMax thinking)
+            // Content is a string with interleaved <think>...</think> blocks (Claude/MiniMax thinking)
+            char expr_markers[256] = {0};
             const char *src = content->valuestring;
             char *dst = text_out;
             size_t written = 0;
@@ -476,10 +501,12 @@ static bool parse_openai_response(
             while (*src && written < max_len) {
                 // Check for <think> tag (MiniMax/Claude format)
                 if (strncmp(src, "<think>", 7) == 0) {
+                    // Extract any <<EXPR:>> markers from the thinking block before skipping
+                    extract_expr_markers_from_text(src, expr_markers, sizeof(expr_markers));
                     // Skip until </think>
                     const char *end = strstr(src, "</think>");
                     if (end) {
-                        src = end + 8;  // skip past </think>
+                        src = end + 8;
                         continue;
                     }
                 }
@@ -487,8 +514,18 @@ static bool parse_openai_response(
                 written++;
             }
             *dst = '\0';
+            // Prepend expression markers found in thinking blocks
+            if (expr_markers[0] != '\0') {
+                size_t expr_len = strlen(expr_markers);
+                size_t text_len = strlen(text_out);
+                if (expr_len + text_len < text_out_len - 1) {
+                    memmove(text_out + expr_len, text_out, text_len + 1);
+                    memcpy(text_out, expr_markers, expr_len);
+                }
+            }
         } else if (cJSON_IsArray(content)) {
             // MiniMax returns content as array of blocks with type=text or type=thinking
+            char expr_markers[256] = {0};
             size_t written = 0;
             int arr_size = cJSON_GetArraySize(content);
             for (int i = 0; i < arr_size && written < text_out_len - 1; i++) {
@@ -496,8 +533,14 @@ static bool parse_openai_response(
                 if (!block) continue;
                 cJSON *type = cJSON_GetObjectItem(block, "type");
                 if (!type || !cJSON_IsString(type)) continue;
-                // Skip thinking blocks - only extract text blocks
-                if (strcmp(type->valuestring, "thinking") == 0) continue;
+                // Extract expression markers from thinking blocks before skipping
+                if (strcmp(type->valuestring, "thinking") == 0) {
+                    cJSON *think_text = cJSON_GetObjectItem(block, "thinking");
+                    if (think_text && cJSON_IsString(think_text)) {
+                        extract_expr_markers_from_text(think_text->valuestring, expr_markers, sizeof(expr_markers));
+                    }
+                    continue;
+                }
                 if (strcmp(type->valuestring, "text") != 0) continue;
                 cJSON *text = cJSON_GetObjectItem(block, "text");
                 if (!text || !cJSON_IsString(text)) continue;
@@ -509,6 +552,15 @@ static bool parse_openai_response(
                 written += len;
             }
             text_out[written] = '\0';
+            // Prepend expression markers found in thinking blocks
+            if (expr_markers[0] != '\0') {
+                size_t expr_len = strlen(expr_markers);
+                size_t text_len = strlen(text_out);
+                if (expr_len + text_len < text_out_len - 1) {
+                    memmove(text_out + expr_len, text_out, text_len + 1);
+                    memcpy(text_out, expr_markers, expr_len);
+                }
+            }
         }
     }
 

@@ -60,6 +60,7 @@ void tools_dht_test_set_mock_failure(const char *error_message);
 
 // Display
 bool tools_set_expression_handler(const cJSON *input, char *result, size_t result_len);
+bool tools_play_expression_handler(const cJSON *input, char *result, size_t result_len);
 
 // Servo
 bool tools_servo_set_handler(const cJSON *input, char *result, size_t result_len);

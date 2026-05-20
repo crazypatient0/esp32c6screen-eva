@@ -338,6 +338,15 @@ static bool filter_thinking_content(const char *input, char *output, size_t outp
             }
         }
 
+        // Skip <<EXPR:xxx>> expression markers (already played by parse_and_play_expr)
+        if (strncmp(src, "<<EXPR:", 8) == 0) {
+            const char *end = strstr(src, ">>");
+            if (end) {
+                src = end + 2;  // skip past >>
+                continue;
+            }
+        }
+
         // Skip debug/info lines (bridge output)
         const char *line_start = src;
         while (*line_start == '\n' || *line_start == '\r') line_start++;

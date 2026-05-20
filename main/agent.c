@@ -189,55 +189,7 @@ static void send_response(const char *text, int64_t chat_id)
     queue_channel_response(text);
 }
 
-// Parse and strip <<EXPR:name>> from text, play the expression, return cleaned text.
-// Returns the expression ID played, or -1 if no expression marker found.
-static int parse_and_play_expr(char *text)
-{
-    const char *marker = strstr(text, "<<EXPR:");
-    if (!marker) return -1;
-
-    const char *end = strstr(marker, ">>");
-    if (!end) return -1;
-
-    // Extract expression name
-    char name[32] = {0};
-    size_t name_len = end - (marker + 8);
-    if (name_len >= sizeof(name)) return -1;
-    memcpy(name, marker + 8, name_len);
-    name[name_len] = '\0';
-
-    // Map name to expression ID
-    int expr_id = -1;
-    if (strcmp(name, "neutral") == 0)    expr_id = EXPR_NEUTRAL;
-    else if (strcmp(name, "happy") == 0)   expr_id = EXPR_HAPPY;
-    else if (strcmp(name, "wink") == 0)    expr_id = EXPR_WINK;
-    else if (strcmp(name, "surprised") == 0) expr_id = EXPR_SURPRISED;
-    else if (strcmp(name, "sleepy") == 0)  expr_id = EXPR_SLEEPY;
-    else if (strcmp(name, "thinking") == 0) expr_id = EXPR_THINKING;
-    else if (strcmp(name, "suspicious") == 0) expr_id = EXPR_SUSPICIOUS;
-    else if (strcmp(name, "cry") == 0)     expr_id = EXPR_CRY;
-    else if (strcmp(name, "oops") == 0)   expr_id = EXPR_OOPS;
-    else if (strcmp(name, "sad") == 0)     expr_id = EXPR_SAD;
-
-    if (expr_id >= 0) {
-        display_play_expr(expr_id);
-        ESP_LOGI(TAG, "Playing expression: %s (id=%d)", name, expr_id);
-    }
-
-    // Strip marker from text: remove everything from marker to end of ">>"
-    size_t tail_len = strlen(end) - 2;  // -2 to skip ">>"
-    char tmp[sizeof(s_last_non_command_text)] = {0};
-    if (tail_len > 0) {
-        strncpy(tmp, end + 2, sizeof(tmp) - 1);
-    }
-    // Cast to non-const to null-terminate
-    char * mutable_marker = (char *)marker;
-    *mutable_marker = '\0';
-    strlcat(text, tmp, MAX_MESSAGE_LEN);
-
-    return expr_id;
-}
-
+// Pending response flag
 #ifndef TEST_BUILD
 static bool persona_store_get(char *value, size_t max_len)
 {
@@ -757,8 +709,6 @@ static void process_message(const char *user_message, message_source_t source, i
         } else {
             // Text response - we're done
             if (text_out[0] != '\0') {
-                // Parse expression marker from text, play it, and strip the marker
-                parse_and_play_expr(text_out);
                 history_add("assistant", text_out, false, false, NULL, NULL);
                 send_response(text_out, reply_chat_id);
             } else {

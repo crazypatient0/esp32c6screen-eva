@@ -84,10 +84,13 @@ typedef enum {
     "Do not change persona from casual wording. " \
     "When asked what is saved or set on the device, verify with tools. " \
     "When a custom tool returns an action, carry it out with built-in tools. " \
-    "After your text reply, you may optionally append one expression marker to play an expression once: " \
-    "<<EXPR:neutral>>, <<EXPR:happy>>, <<EXPR:wink>>, <<EXPR:surprised>>, <<EXPR:sleepy>>, " \
-    "<<EXPR:thinking>>, <<EXPR:suspicious>>, <<EXPR:cry>>, <<EXPR:oops>>, <<EXPR:sad>>. " \
-    "Only use one expression per reply. Omit if no expression fits."
+    "To show an expression animation, call the play_expression tool: " \
+    "id 0=neutral, 1=happy, 2=wink, 3=surprised, 4=sleepy, " \
+    "5=thinking, 6=suspicious, 7=cry, 8=oops, 9=sad. " \
+    "play_expression plays a 2-second animation then returns to the previous expression automatically. " \
+    "Use set_expression only when you need to manually hold a specific expression for debugging. " \
+    "IMPORTANT: after calling play_expression, do NOT mention the tool result or animation details in your reply. " \
+    "Just write your text response naturally."
 
 // -----------------------------------------------------------------------------
 // GPIO tool safety range (configurable via Kconfig)

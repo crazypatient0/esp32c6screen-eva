@@ -32,6 +32,32 @@ bool tools_set_expression_handler(const cJSON *input, char *result, size_t resul
     return true;
 }
 
+bool tools_play_expression_handler(const cJSON *input, char *result, size_t result_len)
+{
+    const cJSON *id_item = cJSON_GetObjectItem(input, "id");
+    if (!id_item || !cJSON_IsNumber(id_item)) {
+        snprintf(result, result_len, "Error: missing or invalid 'id' field");
+        return false;
+    }
+
+    int id = id_item->valueint;
+    if (id < 0 || id > 9) {
+        snprintf(result, result_len, "Error: expression id must be 0-9");
+        return false;
+    }
+
+    display_play_expr(id);
+
+    static const char *names[] = {
+        "neutral", "happy ∩∩", "wink", "surprised O_O", "sleepy __",
+        "thinking ↔", "suspicious",
+        "cry T_T", "oops >.<", "sad ∪∪"
+    };
+    snprintf(result, result_len, "Playing expression: %s (%d) — 2-second animation, then returns to previous", names[id], id);
+    ESP_LOGI(TAG, "play_expression: %d", id);
+    return true;
+}
+
 bool tools_servo_set_handler(const cJSON *input, char *result, size_t result_len)
 {
     const cJSON *id_item = cJSON_GetObjectItem(input, "id");
