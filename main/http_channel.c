@@ -366,7 +366,7 @@ static esp_err_t index_handler(httpd_req_t *req)
 "font-size:13px;overflow:hidden;display:flex;flex-direction:column}"
 ".wrap{display:grid;grid-template-columns:320px 1fr;height:100vh}"
 ".panel-left{padding:20px;border-right:1px solid var(--border);overflow-y:auto}"
-".panel-right{display:flex;flex-direction:column;padding:20px;max-height:90vh;overflow:hidden}"
+".panel-right{display:flex;flex-direction:column;padding:20px;max-height:98vh;overflow:hidden}"
 ".hdr{display:flex;align-items:center;gap:12px;margin-bottom:24px}"
 ".hdr h1{font-size:16px;font-weight:600;color:var(--accent);letter-spacing:2px}"
 ".hdr .ver{color:var(--muted);font-size:11px}"
