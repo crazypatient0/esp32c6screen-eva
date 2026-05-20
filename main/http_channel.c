@@ -313,34 +313,29 @@ static esp_err_t update_handler(httpd_req_t *req)
         return ESP_OK;  // won't reach here
     }
 
-    // Default: stream firmware data
-    size_t buf_len = req->content_len > 0 ? req->content_len : 1024;
-    char *buf = malloc(buf_len);
-    if (!buf) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Memory error");
-        return ESP_ERR_NO_MEM;
-    }
+    // Default: stream firmware data with fixed small buffer
+    #define OTA_BUF_SIZE 1024
+    static char s_ota_buf[OTA_BUF_SIZE];
 
     size_t received = 0;
     int ret;
     while (received < req->content_len) {
-        ret = httpd_req_recv(req, buf, buf_len);
+        int chunk = (req->content_len - received) < OTA_BUF_SIZE
+                    ? (req->content_len - received) : OTA_BUF_SIZE;
+        ret = httpd_req_recv(req, s_ota_buf, chunk);
         if (ret <= 0) {
             ESP_LOGE(TAG, "[OTA] recv error at offset %d: %d", received, ret);
-            free(buf);
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Recv error");
             return ESP_FAIL;
         }
-        esp_err_t err = ota_update_write(buf, ret);
+        esp_err_t err = ota_update_write(s_ota_buf, ret);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "[OTA] write error: %s", esp_err_to_name(err));
-            free(buf);
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA write error");
             return err;
         }
         received += ret;
     }
-    free(buf);
 
     ESP_LOGI(TAG, "[OTA] Wrote %d bytes", received);
     httpd_resp_set_type(req, "text/plain");
