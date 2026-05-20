@@ -33,11 +33,14 @@ uint8_t display_cpu_usage_get(void) {
 static int current_expr = EXPR_NEUTRAL;
 static int target_expr = EXPR_NEUTRAL;
 
-// Thinking animation state (5-phase, unchanged)
+// Thinking animation state (5-phase, loops while s_think_mode is set)
 static bool s_thinking = false;
 static int64_t s_thinking_start;
 static int s_thinking_base;
 static int s_thinking_phase = 0;
+// s_think_mode: when true, the thinking animation loops continuously
+// until display_think_stop() is called (e.g., when LLM response arrives)
+static bool s_think_mode = false;
 
 // Suspicious animation state (5-phase, unchanged)
 static bool s_suspicious = false;
@@ -203,7 +206,35 @@ void display_play_expr(int id){
 
 int display_get_expr(void){ return current_expr; }
 
-bool display_is_thinking(void){ return s_thinking || s_suspicious; }
+bool display_is_thinking(void){ return s_thinking || s_suspicious || s_think_mode; }
+
+// Start continuous thinking mode: loops the thinking animation until display_think_stop().
+// Called when agent starts processing a user message.
+void display_think_start(void){
+    if (s_think_mode) return;  // already in think mode
+    ESP_LOGI(TAG_DISP, "display_think_start: entering think mode");
+    s_think_mode = true;
+    // Trigger the thinking animation if not already running
+    if (!s_thinking) {
+        s_thinking_base = current_expr;
+        s_thinking = true;
+        s_thinking_phase = 0;
+        s_thinking_start = esp_timer_get_time();
+        target_expr = EXPR_LEFT_IDX;
+    }
+}
+
+// Stop continuous thinking mode: ends the looping animation and restores base expression.
+// Called when agent sends the final response.
+void display_think_stop(void){
+    if (!s_think_mode && !s_thinking) return;  // not in think mode
+    ESP_LOGI(TAG_DISP, "display_think_stop: exiting think mode");
+    s_think_mode = false;
+    s_thinking = false;
+    current_expr = s_thinking_base;
+    target_expr = s_thinking_base;
+    apply(current_expr);
+}
 
 static void display_task(void *arg){
     // Initialize LVGL
@@ -321,6 +352,16 @@ static void display_task(void *arg){
                 s_thinking_phase = 4;
             } else if(s_thinking_phase == 4 && elapsed_ms >= 3500){
                 // thinking animation complete (3.5s total)
+                // If s_think_mode is set (LLM still processing), loop the animation
+                int elapsed_s = (int)((esp_timer_get_time() - s_thinking_start) / 1000000);
+                ESP_LOGI(TAG_DISP, "thinking phase4: s_think_mode=%d, s_thinking=%d, elapsed=%d s",
+                         s_think_mode, s_thinking, elapsed_s);
+                if (s_think_mode && s_thinking) {
+                    ESP_LOGI(TAG_DISP, "thinking loop: restarting (s_think_mode=1, s_thinking=1)");
+                    s_thinking_phase = 0;
+                    s_thinking_start = esp_timer_get_time();
+                    continue;
+                }
                 if (!s_thinking) break;
                 s_thinking_phase = 0;
                 s_thinking = false;

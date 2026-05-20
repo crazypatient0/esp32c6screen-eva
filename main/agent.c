@@ -187,6 +187,9 @@ static void send_response(const char *text, int64_t chat_id)
     s_pending_response = false;
     s_pending_response_start_us = 0;
 
+    // Stop the continuous thinking animation on screen
+    display_think_stop();
+
     queue_channel_response(text);
 }
 
@@ -511,6 +514,9 @@ static void process_message(const char *user_message, message_source_t source, i
     // If left pending for > MESSAGE_TIMEOUT_MS, the response is considered lost.
     s_pending_response = true;
     s_pending_response_start_us = esp_timer_get_time();
+
+    // Trigger continuous thinking animation on screen (loops until display_think_stop)
+    display_think_start();
 
     // Get tools
     int tool_count;

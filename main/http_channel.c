@@ -668,6 +668,12 @@ static esp_err_t poll_handler(httpd_req_t *req)
     httpd_resp_set_type(req, "text/plain; charset=utf-8");
     httpd_resp_set_hdr(req, "Content-Type", "text/plain; charset=utf-8");
     esp_err_t err = httpd_resp_send(req, resp, strlen(resp));
+
+    // Clear the response buffer after returning so the next poll
+    // doesn't keep returning the same text, causing the UI to re-trigger
+    // thinking state on repeated identical responses.
+    channel_clear_last_response();
+
     ESP_LOGI(TAG, "[HTTP] GET /poll -> sent, err=%s", esp_err_to_name(err));
     return err;
 }
@@ -691,8 +697,9 @@ static esp_err_t status_handler(httpd_req_t *req)
         ESP_LOGW(TAG, "[HTTP] GET /status -> esp_wifi_sta_get_ap_info failed");
     }
 
-    // Current expression
+    // Current expression (may be internal index 10-13 during thinking/suspicious animation)
     int expr = display_get_expr();
+    if (expr < 0 || expr >= EXPR_COUNT) expr = 0;
     cJSON_AddStringToObject(root, "expression", EXPR_NAMES[expr]);
 
     // Uptime

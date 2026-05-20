@@ -20,6 +20,10 @@ void channel_write(const char *text);
 // Get the last agent response (for HTTP chat polling).
 const char *channel_get_last_response(void);
 
+// Clear the last response buffer. Called by poll_handler after
+// returning the response so subsequent polls don't return stale text.
+void channel_clear_last_response(void);
+
 // Direct write to last_response buffer (bypasses queue).
 // Used as fallback when queue is full to ensure error messages reach the UI.
 void channel_set_last_response_direct(const char *text);

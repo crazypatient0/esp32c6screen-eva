@@ -145,6 +145,13 @@ const char *channel_get_last_response(void) {
     return ret;
 }
 
+void channel_clear_last_response(void) {
+    if (!s_response_mutex) return;
+    xSemaphoreTake(s_response_mutex, portMAX_DELAY);
+    s_last_response[0] = '\0';
+    xSemaphoreGive(s_response_mutex);
+}
+
 // Direct write to last_response buffer (bypasses queue).
 // Used as fallback when queue is full to ensure error messages reach the UI.
 void channel_set_last_response_direct(const char *text) {

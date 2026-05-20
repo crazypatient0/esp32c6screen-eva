@@ -18,6 +18,14 @@ int display_get_expr(void);
 // Check if thinking animation is in progress
 bool display_is_thinking(void);
 
+// Start continuous thinking mode (loops animation until display_think_stop).
+// Call when agent begins processing a user message.
+void display_think_start(void);
+
+// Stop continuous thinking mode and restore base expression.
+// Call when agent sends the final response.
+void display_think_stop(void);
+
 // Get LVGL FPS average (frames per second, updated once per second)
 uint32_t lvgl_fps_avg_get(void);
 
