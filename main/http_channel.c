@@ -1,6 +1,7 @@
 #include "http_channel.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
 #include "esp_netif_types.h"
@@ -14,6 +15,7 @@
 #include "display_task.h"
 #include "LVGL_Driver.h"
 #include "lvgl.h"
+#include "ota.h"
 #include "nvs_keys.h"
 #include <string.h>
 #include <stdio.h>
@@ -266,6 +268,86 @@ static const char *CONTROL_HTML2 =
 
 // === Handlers ===
 
+static esp_err_t update_handler(httpd_req_t *req)
+{
+    static bool s_ota_started = false;
+
+    ESP_LOGI(TAG, "[HTTP] POST /update, content_length=%lu", req->content_len);
+
+    // Handle different stages via query param
+    char stage[16] = {0};
+    httpd_query_key_value(req->uri, "stage", stage, sizeof(stage));
+
+    if (strcmp(stage, "begin") == 0 || !s_ota_started) {
+        if (ota_is_in_progress()) {
+            // Already started via query
+            s_ota_started = true;
+        } else {
+            esp_err_t err = ota_update_begin();
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "[OTA] begin failed: %s", esp_err_to_name(err));
+                httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA begin failed");
+                return err;
+            }
+            s_ota_started = true;
+        }
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_send(req, "OTA begin OK, send body data", HTTPD_RESP_USE_STRLEN);
+        return ESP_OK;
+    }
+
+    if (strcmp(stage, "end") == 0) {
+        s_ota_started = false;
+        esp_err_t err = ota_update_end();
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "[OTA] end failed: %s", esp_err_to_name(err));
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA end failed");
+            return err;
+        }
+        // Reboot
+        ESP_LOGI(TAG, "[OTA] Update complete, rebooting...");
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_send(req, "OTA update OK, rebooting...", HTTPD_RESP_USE_STRLEN);
+        vTaskDelay(pdMS_TO_TICKS(500));
+        esp_restart();
+        return ESP_OK;  // won't reach here
+    }
+
+    // Default: stream firmware data
+    size_t buf_len = req->content_len > 0 ? req->content_len : 1024;
+    char *buf = malloc(buf_len);
+    if (!buf) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Memory error");
+        return ESP_ERR_NO_MEM;
+    }
+
+    size_t received = 0;
+    int ret;
+    while (received < req->content_len) {
+        ret = httpd_req_recv(req, buf, buf_len);
+        if (ret <= 0) {
+            ESP_LOGE(TAG, "[OTA] recv error at offset %d: %d", received, ret);
+            free(buf);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Recv error");
+            return ESP_FAIL;
+        }
+        esp_err_t err = ota_update_write(buf, ret);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "[OTA] write error: %s", esp_err_to_name(err));
+            free(buf);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA write error");
+            return err;
+        }
+        received += ret;
+    }
+    free(buf);
+
+    ESP_LOGI(TAG, "[OTA] Wrote %d bytes", received);
+    httpd_resp_set_type(req, "text/plain");
+    httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
 static esp_err_t index_handler(httpd_req_t *req)
 {
     ESP_LOGI(TAG, "[HTTP] GET / -> index handler");
@@ -289,7 +371,7 @@ static esp_err_t index_handler(httpd_req_t *req)
 "font-size:13px;overflow:hidden;display:flex;flex-direction:column}"
 ".wrap{display:grid;grid-template-columns:320px 1fr;height:100vh}"
 ".panel-left{padding:20px;border-right:1px solid var(--border);overflow-y:auto}"
-".panel-right{display:flex;flex-direction:column;padding:20px}"
+".panel-right{display:flex;flex-direction:column;padding:20px;max-height:90vh;overflow:hidden}"
 ".hdr{display:flex;align-items:center;gap:12px;margin-bottom:24px}"
 ".hdr h1{font-size:16px;font-weight:600;color:var(--accent);letter-spacing:2px}"
 ".hdr .ver{color:var(--muted);font-size:11px}"
@@ -319,6 +401,10 @@ static esp_err_t index_handler(httpd_req_t *req)
 "button.primary:hover{background:#00eec4}"
 ".msg-area{flex:1;min-height:0;overflow-y:auto;background:var(--panel);border:1px solid var(--border);"
 "border-radius:8px;padding:12px;margin-bottom:12px;min-height:0}"
+".msg-area::-webkit-scrollbar{width:6px}"
+".msg-area::-webkit-scrollbar-track{background:transparent}"
+".msg-area::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}"
+".msg-area::-webkit-scrollbar-thumb:hover{background:var(--accent)}"
 ".msg{margin-bottom:10px;padding:8px 12px;border-radius:8px;max-width:85%;"
 "font-size:12px;line-height:1.5;word-break:break-word}"
 ".msg.user{background:linear-gradient(135deg,#004d3d,#006655);border:1px solid var(--accent);"
@@ -979,6 +1065,7 @@ esp_err_t http_channel_start(QueueHandle_t input_queue)
             {"/expr/play", HTTP_POST, expr_play_handler, NULL},
             {"/config/llm", HTTP_GET, config_llm_get_handler, NULL},
             {"/config/llm", HTTP_POST, config_llm_set_handler, NULL},
+            {"/update", HTTP_POST, update_handler, NULL},
             {"/debug", HTTP_GET, debug_handler, NULL},
             {"/*", HTTP_GET, not_found_handler, NULL},
             {"/*", HTTP_POST, not_found_handler, NULL},

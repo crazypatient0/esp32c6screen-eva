@@ -22,4 +22,10 @@ bool ota_is_pending_verify(void);
 // Rollback to previous firmware
 esp_err_t ota_rollback(void);
 
+// --- HTTP OTA update ---
+esp_err_t ota_update_begin(void);
+esp_err_t ota_update_write(const void *buf, size_t len);
+esp_err_t ota_update_end(void);
+bool ota_is_in_progress(void);
+
 #endif // OTA_H
