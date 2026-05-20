@@ -397,17 +397,19 @@ static void channel_write_task(void *arg)
             ESP_LOGI(TAG, "[CHANNEL_OUT] after_filter has_content=%d display: %.80s",
                      has_content, display_text);
 
-            // Print filtered response with newlines to serial
-            channel_write_normalized_text(display_text, portMAX_DELAY);
-            channel_io_write_bytes((const uint8_t *)"\r\n\r\n", 4, portMAX_DELAY);
-
-            // Save for HTTP chat polling - filter out thinking content
+            // Update HTTP poll response first (non-blocking path) - must happen
+            // before serial write so /poll always returns the latest response,
+            // even if USB TX is blocked by an unopened serial monitor
             if (s_response_mutex) {
                 xSemaphoreTake(s_response_mutex, portMAX_DELAY);
                 strncpy(s_last_response, display_text, sizeof(s_last_response) - 1);
                 s_last_response[sizeof(s_last_response) - 1] = '\0';
                 xSemaphoreGive(s_response_mutex);
             }
+
+            // Print filtered response with newlines to serial
+            channel_write_normalized_text(display_text, portMAX_DELAY);
+            channel_io_write_bytes((const uint8_t *)"\r\n\r\n", 4, portMAX_DELAY);
         }
     }
 }
