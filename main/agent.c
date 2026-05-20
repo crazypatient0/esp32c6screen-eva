@@ -159,21 +159,22 @@ static bool queue_channel_response(const char *text)
     strncpy(msg.text, text, CHANNEL_TX_BUF_SIZE - 1);
     msg.text[CHANNEL_TX_BUF_SIZE - 1] = '\0';
 
-    // Try once with a short timeout first
-    if (xQueueSend(s_channel_output_queue, &msg, pdMS_TO_TICKS(100)) == pdTRUE) {
+    // Try once with zero timeout (non-blocking) - if queue is full (e.g. serial TX
+    // is blocked), fall back to direct write immediately so the agent is never blocked.
+    if (xQueueSend(s_channel_output_queue, &msg, 0) == pdTRUE) {
         return true;
     }
 
-    // Queue was full - retry with exponential backoff before falling back to direct write
+    // Queue was full - retry once with a short timeout
     ESP_LOGW(TAG, "Channel queue full, retrying...");
-    vTaskDelay(pdMS_TO_TICKS(200));
-
-    if (xQueueSend(s_channel_output_queue, &msg, pdMS_TO_TICKS(500)) == pdTRUE) {
+    if (xQueueSend(s_channel_output_queue, &msg, pdMS_TO_TICKS(50)) == pdTRUE) {
         return true;
     }
 
-    // Queue still full - do direct write to s_last_response as last resort.
-    // This ensures error messages at least reach the HTTP poll client.
+    // Queue still full (serial TX likely blocked) - do direct write to s_last_response
+    // as last resort. This ensures the response reaches the HTTP poll client even if
+    // serial output is stuck. s_last_response is updated before serial write in
+    // channel_write_task, so the HTTP path always works regardless of serial state.
     ESP_LOGW(TAG, "Channel queue still full, using direct write fallback");
     channel_set_last_response_direct(text);
     return false;

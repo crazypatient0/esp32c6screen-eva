@@ -665,7 +665,8 @@ static esp_err_t poll_handler(httpd_req_t *req)
     const char *resp = channel_get_last_response();
     if (!resp || !*resp) resp = " ";
     ESP_LOGI(TAG, "[HTTP] GET /poll -> resp_len=%d", (int)strlen(resp));
-    httpd_resp_set_type(req, "text/plain");
+    httpd_resp_set_type(req, "text/plain; charset=utf-8");
+    httpd_resp_set_hdr(req, "Content-Type", "text/plain; charset=utf-8");
     esp_err_t err = httpd_resp_send(req, resp, strlen(resp));
     ESP_LOGI(TAG, "[HTTP] GET /poll -> sent, err=%s", esp_err_to_name(err));
     return err;
