@@ -18,6 +18,37 @@ typedef struct {
     bool truncated;
 } web_buf_ctx_t;
 
+// Percent-encode non-ASCII characters in a URL path/query string.
+// Host part (between :// and first /) is left unchanged.
+// Returns encoded URL into dst (must have enough space, worst case = 3x len).
+// Returns dst on success, or NULL on buffer overflow.
+static char *url_encode_non_ascii(const char *url, char *dst, size_t dst_size)
+{
+    size_t di = 0;
+    const char *p = url;
+
+    // Find host end (first '/' after "://")
+    const char *host_end = strstr(url, "://");
+    if (host_end) {
+        host_end = strchr(host_end + 3, '/');
+    }
+
+    while (*p && di < dst_size - 1) {
+        if ((unsigned char)*p < 0x80) {
+            // ASCII: copy as-is
+            dst[di++] = *p++;
+        } else {
+            // Non-ASCII: percent-encode
+            if (di + 3 >= dst_size) return NULL;
+            snprintf(&dst[di], 4, "%%%02X", (unsigned char)*p);
+            di += 3;
+            p++;
+        }
+    }
+    dst[di] = '\0';
+    return dst;
+}
+
 static esp_err_t web_http_event_handler(esp_http_client_event_t *evt)
 {
     web_buf_ctx_t *ctx = (web_buf_ctx_t *)evt->user_data;
@@ -79,13 +110,22 @@ bool tools_web_fetch_handler(const cJSON *input, char *result, size_t result_len
     static char s_response[MAX_RESULT_SIZE];
     static char s_clean[MAX_RESULT_SIZE];
     static char s_out[MAX_RESULT_SIZE];
+    static char s_url_encoded[MAX_RESULT_SIZE * 3];  // worst case: every char becomes %XX
     s_response[0] = '\0';
     s_clean[0] = '\0';
     s_out[0] = '\0';
+    s_url_encoded[0] = '\0';
     web_buf_ctx_t ctx = {.buf = s_response, .len = 0, .max = MAX_RESULT_SIZE, .truncated = false};
 
+    // Encode non-ASCII characters in URL path/query (esp_http_client can't handle them)
+    const char *url_to_use = url;
+    if (url_encode_non_ascii(url, s_url_encoded, sizeof(s_url_encoded)) != NULL) {
+        url_to_use = s_url_encoded;
+        ESP_LOGI(TAG, "web_fetch: encoded URL = %s", url_to_use);
+    }
+
     esp_http_client_config_t config = {
-        .url = url,
+        .url = url_to_use,
         .event_handler = web_http_event_handler,
         .user_data = &ctx,
         .timeout_ms = 3000,
