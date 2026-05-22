@@ -152,6 +152,9 @@ void display_set_expr(int id){
             ESP_LOGI(TAG_DISP, "thinking already in progress, ignoring re-trigger");
             return;
         }
+        // Cancel any in-progress suspicious/playing animation to avoid conflicts
+        s_suspicious = false;
+        s_playing = false;
         s_thinking_base = current_expr;
         s_thinking = true;
         s_thinking_phase = 0;
@@ -160,6 +163,10 @@ void display_set_expr(int id){
         ESP_LOGI(TAG_DISP, "thinking started from expr=%d", s_thinking_base);
     } else if(id == EXPR_SUSPICIOUS){
         // Start suspicious animation from current expression
+        // Cancel any in-progress thinking/playing animation to avoid conflicts
+        s_thinking = false;
+        s_think_mode = false;
+        s_playing = false;
         s_suspicious_base = current_expr;
         s_suspicious = true;
         s_suspicious_phase = 0;

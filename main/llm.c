@@ -413,7 +413,7 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
                 ctx->saw_disconnected = true;
                 ctx->disconnected_us = now_us;
             }
-            if (evt && evt->client) {
+            if (evt->client) {
                 int sock_errno = esp_http_client_get_errno(evt->client);
                 if (ctx) {
                     ctx->event_errno = sock_errno;
@@ -423,7 +423,7 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
                              evt->event_id, sock_errno, strerror(sock_errno));
                 }
             }
-            if (ctx && evt && evt->data) {
+            if (ctx && evt->data) {
                 int tls_stack_err = 0;
                 int tls_cert_flags = 0;
                 esp_err_t tls_err = esp_tls_get_and_clear_last_error(

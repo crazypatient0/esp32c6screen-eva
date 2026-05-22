@@ -415,8 +415,12 @@ static void channel_write_task(void *arg)
             }
 
             // Print filtered response with newlines to serial
-            channel_write_normalized_text(display_text, portMAX_DELAY);
-            channel_io_write_bytes((const uint8_t *)"\r\n\r\n", 4, portMAX_DELAY);
+            // Use non-blocking (timeout=0) so serial output never blocks message processing.
+            // USB Serial JTAG TX buffer is small (~128-256 bytes); if serial monitor is closed,
+            // blocking writes would stall forever and prevent s_last_response from being updated
+            // for subsequent messages, breaking /poll even though the LLM response is valid.
+            channel_write_normalized_text(display_text, 0);
+            channel_io_write_bytes((const uint8_t *)"\r\n\r\n", 4, 0);
         }
     }
 }

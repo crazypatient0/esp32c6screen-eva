@@ -821,7 +821,7 @@ static esp_err_t expr_play_handler(httpd_req_t *req)
     cJSON *count_item = cJSON_GetObjectItem(root, "count");
     cJSON *delay_item = cJSON_GetObjectItem(root, "delay_ms");
 
-    int id = id_item ? cJSON_GetObjectItem(root, "id")->valueint : 0;
+    int id = id_item ? id_item->valueint : 0;
     int count = count_item ? count_item->valueint : 3;
     int delay_ms = delay_item ? delay_item->valueint : 500;
 
