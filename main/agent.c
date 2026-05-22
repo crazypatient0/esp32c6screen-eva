@@ -1,6 +1,7 @@
 #include "agent.h"
 #include "agent_commands.h"
 #include "agent_prompt.h"
+#include "agent_memory.h"
 #include "channel.h"
 #include "config.h"
 #include "display_task.h"
@@ -33,7 +34,7 @@ static int64_t s_last_start_response_us = 0;
 static int64_t s_last_non_command_response_us = 0;
 static char s_last_non_command_text[CHANNEL_RX_BUF_SIZE] = {0};
 static bool s_messages_paused = false;
-static char s_system_prompt_buf[2048];
+static char s_system_prompt_buf[3072];
 
 // Pending response flag: set to true when agent starts processing,
 // cleared when send_response is called (via queue_channel_response).
@@ -724,6 +725,9 @@ static void process_message(const char *user_message, message_source_t source, i
             }
             json_free_parsed_response();
             done = true;
+            // Update persistent memory with this exchange
+            const char *resp_to_save = (text_out[0] != '\0') ? text_out : "(No response from Claude)";
+            agent_memory_append(user_message, resp_to_save);
         }
     }
 
@@ -806,6 +810,7 @@ esp_err_t agent_start(QueueHandle_t input_queue,
     s_input_queue = input_queue;
     s_channel_output_queue = channel_output_queue;
     load_persona_from_store();
+    agent_memory_init();
 
     if (xTaskCreate(agent_task, "agent", AGENT_TASK_STACK_SIZE, NULL,
                     AGENT_TASK_PRIORITY, NULL) != pdPASS) {

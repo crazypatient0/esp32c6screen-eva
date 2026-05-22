@@ -23,6 +23,7 @@ idf_component_register(
         "tools_system.c"
         "tools_web.c"
         "memory.c"
+        "agent_memory.c"
         "json_util.c"
         "cron.c"
         "memory_keys.c"

@@ -1,5 +1,6 @@
 #include "agent_prompt.h"
 #include "config.h"
+#include "agent_memory.h"
 #include "esp_log.h"
 #include <stdio.h>
 #include <string.h>
@@ -114,6 +115,20 @@ const char *agent_build_system_prompt(agent_persona_t persona, char *buf, size_t
     if (written < 0 || (size_t)written >= buf_len) {
         ESP_LOGW(TAG, "Persona prompt composition overflow, using base system prompt");
         return SYSTEM_PROMPT;
+    }
+
+    // Append persistent memory if any exists
+    size_t used = (size_t)written;
+    if (used < buf_len - 4) {
+        char mem_buf[AGENT_MEMORY_MAX_SIZE + 64];
+        agent_memory_get(mem_buf, sizeof(mem_buf));
+        if (mem_buf[0] != '\0') {
+            int mem_len = snprintf(buf + used, buf_len - used,
+                "\n\n[Persistent Memory]\n%s", mem_buf);
+            if (mem_len > 0 && (size_t)mem_len < buf_len - used) {
+                ESP_LOGD(TAG, "Memory appended to prompt (%d bytes)", (int)strlen(mem_buf));
+            }
+        }
     }
 
     return buf;
